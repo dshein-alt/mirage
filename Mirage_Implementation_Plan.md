@@ -1,7 +1,7 @@
-# SD Workbench — Complete Implementation Plan
+# Mirage — Complete Implementation Plan
 
 **Status:** Implementation handoff 1.0  
-**Scope:** Standalone local image-generation workbench built around `stable-diffusion.cpp` (`sd.cpp`)  
+**Scope:** Standalone local image-generation application built around `stable-diffusion.cpp` (`sd.cpp`)  
 **Initial target:** Linux desktop (ALT Linux), AMD Radeon 780M (RADV/Vulkan), 32 GB shared RAM, rootless Podman + podman-compose  
 **Interfaces:** Python CLI, JSON HTTP API, buildless local web UI  
 **Out of scope for v1:** Sezam integration, multi-user cloud deployment, training/fine-tuning, custom inference kernels
@@ -31,7 +31,7 @@ Must-haves:
                                     |
                            JSON REST + SSE
                                     |
-CLI (sdwb) ----> Common Python application services
+CLI (mirage) ----> Common Python application services
                                     |
                    +----------------+----------------+
                    |                |                |
@@ -61,7 +61,7 @@ Builder container --exports--> host data/runtimes/releases/<revision>/bin
 Recommended source tree:
 
 ```text
-sd-workbench/
+mirage/
   README.md
   pyproject.toml
   compose.yaml
@@ -74,7 +74,7 @@ sd-workbench/
     Dockerfile.runtime
     Dockerfile.app                # optional app container
   scripts/bootstrap.sh
-  src/sd_workbench/
+  src/mirage/
     cli.py api.py config.py manifest.py downloader.py
     runtime_builder.py runtime_manager.py runner.py queue.py
     database.py gallery.py images.py progress.py security.py
@@ -100,7 +100,7 @@ sd-workbench/
     outputs/
     thumbnails/
     logs/
-    workbench.sqlite3
+    mirage.sqlite3
 ```
 
 The repository may be upgraded independently of `data/`. All state-bearing directories must be bind-mounted from the host, not stored only in containers or images. Document the exact mount points. Never delete user data in setup/repair/update commands. Container cleanup does not protect against intentional deletion of `data/` itself.
@@ -138,12 +138,11 @@ Exact initial defaults:
 ```json
 {
   "schema_version": 1,
-  "defaults": {"model": "zimage", "resolution": "large", "quality": "high"},
+  "defaults": {"model": "zimage", "resolution": "hd", "quality": "high"},
   "resolutions": {
-    "small": {"width": 256, "height": 256},
-    "medium": {"width": 512, "height": 512},
-    "large": {"width": 768, "height": 768},
-    "hd": {"width": 1024, "height": 1024}
+    "sd": {"width": 512, "height": 512},
+    "hd": {"width": 1024, "height": 1024},
+    "fhd": {"width": 1920, "height": 1080}
   },
   "models": {
     "moss": {
@@ -165,11 +164,11 @@ Exact initial defaults:
 }
 ```
 
-Quality settings are model-specific; resolution settings are application-wide. Preset IDs (`fast`, `medium`, `high`, `small`, `medium`, `large`, `hd`) are stable API identifiers and are translated only in the UI. Resolution and step count are independent. Mark 256×256 experimental when appropriate. Values represent tested/working initial presets, **not proven perceptual quality equivalence**.
+Quality settings are model-specific; resolution settings are application-wide. Preset IDs (`fast`, `medium`, `high`, `sd`, `hd`, `fhd`) are stable API identifiers and are translated only in the UI. Resolution and step count are independent. Fresh requests reject width and height overrides. Values represent tested/working initial presets, **not proven perceptual quality equivalence**.
 
 Requirements:
 1. CLI, API and GUI read one validated effective configuration via the Python configuration service. No duplicate numerical tables in frontend JS.
-2. Support `sdwb config show|validate|reload|restore-defaults` and API `GET /api/config/generation`, `PUT /api/config/generation`, `POST /api/config/generation/reload`, `POST /api/config/generation/restore-defaults`.
+2. Support `mirage config show|validate|reload|restore-defaults` and API `GET /api/config/generation`, `PUT /api/config/generation`, `POST /api/config/generation/reload`, `POST /api/config/generation/restore-defaults`.
 3. A reload parses and validates **the entire document**, then atomically swaps a versioned immutable configuration snapshot. Invalid JSON or values leave the prior snapshot active, with an actionable error.
 4. File edits are applied by explicit reload; optional polling/file-watch support may be added later. Updates through API use atomic temporary-write + fsync + rename.
 5. Validate known model IDs, width/height positive and supported divisibility, supported samplers/schedulers for pinned runtime, steps bounded sensibly, CFG finite/nonnegative, default keys present, no duplicate IDs.
@@ -200,7 +199,7 @@ Record in job logs the actual backend flags, `sd.cpp` version, text conditioning
 
 ### 7.1 Preflight
 
-`sdwb setup` / `scripts/bootstrap.sh` must check: Python 3 version, container runtime and compose provider, access to `/dev/dri` render device, rootless Podman group inheritance (`group_add: [keep-groups]` when applicable), Vulkan device discovery, free disk space, write access, and existing artifacts. Provide exact remediation when checks fail. No assumptions that a Linux group literally named `render` exists.
+`mirage setup` / `scripts/bootstrap.sh` must check: Python 3 version, container runtime and compose provider, access to `/dev/dri` render device, rootless Podman group inheritance (`group_add: [keep-groups]` when applicable), Vulkan device discovery, free disk space, write access, and existing artifacts. Provide exact remediation when checks fail. No assumptions that a Linux group literally named `render` exists.
 
 ### 7.2 Build image
 
@@ -228,12 +227,12 @@ The runtime image has **no sole copy** of compiled sd.cpp. It may be rebuilt aft
 ### 7.5 Management commands
 
 ```text
-sdwb runtime status
-sdwb runtime build [--revision <commit>]
-sdwb runtime verify
-sdwb runtime repair
-sdwb runtime activate <revision>
-sdwb runtime rollback
+mirage runtime status
+mirage runtime build [--revision <commit>]
+mirage runtime verify
+mirage runtime repair
+mirage runtime activate <revision>
+mirage runtime rollback
 ```
 
 Keep prior verified release for rollback; don't switch binaries while a job is executing. Clean old versions only on explicit user request. Document ABI compatibility limitations and require rebuild if host/runtime architecture changes incompatibly.
@@ -243,13 +242,13 @@ Keep prior verified release for rollback; don't switch binaries while a job is e
 Commands:
 
 ```text
-sdwb models available
-sdwb models list
-sdwb models install moss
-sdwb models install qwen --with-editing
-sdwb models install zimage
-sdwb models verify qwen
-sdwb models remove moss
+mirage models available
+mirage models list
+mirage models install moss
+mirage models install qwen --with-editing
+mirage models install zimage
+mirage models verify qwen
+mirage models remove moss
 ```
 
 Requirements: manifest-driven dependencies, disk-space check, visible total size, HTTP(S) with optional HF authentication, retries/backoff, resume via Range only when server supports it, `.partial` files, checksum/size verification, atomic rename, skip valid files, resume interrupted downloads, reject corrupt/mismatched partials, clean explicit cancellation, no deletion while model is in an active job. Reuse content-addressed identical files when safe without introducing fragile symlinks across mounts. Provide per-file and overall progress in both CLI and GUI. Offline generation must work once components are installed.
@@ -258,24 +257,24 @@ The vision mmproj is optional in basic `qwen` setup, required for `qwen` edit; d
 
 ## 9. CLI design
 
-Package as `sdwb` through Python entry points. Preserve current `generate.py` short flags where practical:
+Package as `mirage` through Python entry points. Preserve current `generate.py` short flags where practical:
 
 ```bash
-sdwb generate -m zimage -q high -r large \
+mirage generate -m zimage -q high -r hd \
   -p 'A red fox reading a book under an oak tree'
 
-sdwb generate -m qwen -q fast -r medium \
+mirage generate -m qwen -q fast -r fhd \
   --ref ./car.png -p 'Replace the car with a classic muscle car'
 
-sdwb jobs list
-sdwb jobs show <id>
-sdwb jobs cancel <id>
-sdwb jobs retry <id>
-sdwb gallery list
-sdwb gallery export <image-id>
-sdwb models list
-sdwb config reload
-sdwb serve
+mirage jobs list
+mirage jobs show <id>
+mirage jobs cancel <id>
+mirage jobs retry <id>
+mirage gallery list
+mirage gallery export <image-id>
+mirage models list
+mirage config reload
+mirage serve
 ```
 
 Define explicit `--wait` (synchronous) and `--detach`/default queue behavior, and document exit codes. CLI must talk to the running service for queued jobs, or start the same application services in controlled local mode; it must never independently run an uncoordinated GPU job when the service owns the queue. Use argv arrays, never shell concatenation for user inputs.
