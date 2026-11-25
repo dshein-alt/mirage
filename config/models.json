@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "minimum_sd_revision": "532d2c15c430a785a712b2d94281f04e733008a4",
+  "minimum_sd_revision": "79dc7ca9074d79419a46380cdb95a4524db9b74c",
   "models": {
     "moss": {
       "name": "MOSS-Image-SFT",
