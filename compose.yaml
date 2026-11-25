@@ -2,15 +2,19 @@ services:
   mirage:
     image: ${MIRAGE_APP_IMAGE:?Set to the immutable application image ID or unique tag}
     container_name: mirage
-    network_mode: host
+    ports:
+      - "127.0.0.1:${MIRAGE_PORT:-8765}:${MIRAGE_PORT:-8765}"
     read_only: true
     tmpfs:
       - /tmp
     environment:
       MIRAGE_DATA_DIR: /data
+      MIRAGE_MODE: local
+      MIRAGE_PORT: ${MIRAGE_PORT:-8765}
       MIRAGE_HOST_DATA_DIR: ${MIRAGE_HOST_DATA_DIR:?Set to the absolute host data directory}
       MIRAGE_ENGINE_SOCKET: /run/engine.sock
       MIRAGE_CONTAINER_ENGINE: ${MIRAGE_CONTAINER_ENGINE:-podman}
+      MIRAGE_BIND_HOST: 0.0.0.0
       MIRAGE_DEPLOYMENT_ID: ${MIRAGE_DEPLOYMENT_ID:-compose}
       MIRAGE_CONTAINER_IMAGE_ID: ${MIRAGE_APP_IMAGE}
       HF_TOKEN: ${HF_TOKEN:-}

@@ -5,6 +5,7 @@ import getpass
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import socket
 import sqlite3
@@ -12,12 +13,32 @@ import subprocess
 import sys
 import tempfile
 import time
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 import uuid
 
 APP_NAME = "mirage"
 DATABASE_NAME = "mirage.sqlite3"
 DEFAULT_RELEASE_API = None
+TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{16,64}\Z")
+
+
+def port_number(value):
+    try:
+        port = int(value)
+    except (TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError("port must be an integer from 1 to 65535") from error
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("port must be an integer from 1 to 65535")
+    return port
+
+
+def validate_tokens(admin, browser):
+    for name, value in (("MIRAGE_API_TOKEN", admin), ("MIRAGE_BROWSER_TOKEN", browser)):
+        if not TOKEN_PATTERN.fullmatch(value):
+            raise RuntimeError(f"{name} must be a URL-safe 16-64 character string in authenticated mode")
+    if admin == browser:
+        raise RuntimeError("MIRAGE_API_TOKEN and MIRAGE_BROWSER_TOKEN must be different")
 
 
 def atomic_json(path, document):
@@ -262,12 +283,24 @@ class Installer:
         self.source = destination
         return {"kind": "release", "tag": tag, "commit": commit, "repository": repository, "path": str(destination)}
 
+    def resolve_server_options(self):
+        server = self.state.get("server", {})
+        port = self.args.port if self.args.port is not None else os.environ.get("MIRAGE_PORT", server.get("port", 8765))
+        try:
+            self.port = port_number(port)
+        except argparse.ArgumentTypeError as error:
+            raise RuntimeError(str(error)) from error
+        self.mode = self.args.mode or os.environ.get("MIRAGE_MODE") or server.get("mode", "local")
+        if self.mode not in ("local", "authenticated"):
+            raise RuntimeError("access mode must be local or authenticated")
+
     def resolve_options(self):
         standalone_default = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "mirage" / "data"
         data_default = (self.local_source / "data") if self.local_source else standalone_default
         self.data = Path(self.option("data_dir", "MIRAGE_DATA_DIR", "data_dir", data_default)).resolve()
         self.prefix = Path(self.option("prefix", "MIRAGE_PREFIX", "prefix", Path.home() / ".local" / "bin")).resolve()
         self.launcher = self.prefix / "mirage"
+        self.resolve_server_options()
         engine = self.option("engine", "MIRAGE_CONTAINER_ENGINE", "engine")
         if not engine:
             engine = "podman" if shutil.which("podman") else "docker" if shutil.which("docker") else None
@@ -287,6 +320,10 @@ class Installer:
             destination = self.data / "config" / f"{name}.json"
             if not destination.exists():
                 shutil.copy2(self.source / "config" / f"{name}.default.json", destination)
+        settings_path = self.data / "config" / "settings.json"
+        settings = read_json(settings_path)
+        settings["server"] = {"mode": self.mode, "port": self.port}
+        atomic_json(settings_path, settings)
 
     def build(self):
         if self.args.skip_build:
@@ -318,9 +355,12 @@ class Installer:
 
     def container_arguments(self, name, data, image, deployment, verify_only=False, maintenance=False, final=False):
         socket_path = self.engine_socket()
+        server = read_json(Path(data) / "config" / "settings.json")["server"]
+        port = server["port"]
+        publish_host = "127.0.0.1" if server["mode"] == "local" or verify_only else "0.0.0.0"
         arguments = [
-            "run", "-d", "--name", name, "--network", "host", "--read-only", "--tmpfs", "/tmp",
-            "--user", f"{os.getuid()}:{os.getgid()}",
+            "run", "-d", "--name", name, "--publish", f"{publish_host}:{port}:{port}",
+            "--read-only", "--tmpfs", "/tmp", "--user", f"{os.getuid()}:{os.getgid()}",
         ]
         if self.engine == "podman":
             arguments += ["--userns=keep-id"]
@@ -331,6 +371,7 @@ class Installer:
             "-v", f"{data}:/data:rw", "-v", f"{socket_path}:/run/engine.sock:rw",
             "-e", "MIRAGE_DATA_DIR=/data", "-e", f"MIRAGE_HOST_DATA_DIR={data}",
             "-e", "MIRAGE_ENGINE_SOCKET=/run/engine.sock", "-e", f"MIRAGE_CONTAINER_ENGINE={self.engine}",
+            "-e", "MIRAGE_BIND_HOST=0.0.0.0", "-e", f"MIRAGE_MODE={server['mode']}", "-e", f"MIRAGE_PORT={port}",
             "-e", f"MIRAGE_HOST_UID={os.getuid()}", "-e", f"MIRAGE_HOST_GID={os.getgid()}",
             "-e", f"MIRAGE_HOST_GROUPS={','.join(str(group) for group in os.getgroups())}",
             "-e", "HF_TOKEN", "-e", "MIRAGE_API_TOKEN", "-e", "MIRAGE_BROWSER_TOKEN",
@@ -352,15 +393,20 @@ class Installer:
         return container
 
     def credentials(self):
-        token = os.environ.get("MIRAGE_API_TOKEN", "")
-        settings = read_json(self.data / "config" / "settings.json", {}) or {}
-        host = settings.get("server", {}).get("host", "127.0.0.1")
-        if host not in ("127.0.0.1", "localhost", "::1") and not token:
-            if self.args.non_interactive:
-                raise RuntimeError("MIRAGE_API_TOKEN is required for an authenticated installation")
+        if self.mode == "local":
+            return ""
+        admin = os.environ.get("MIRAGE_API_TOKEN", "")
+        browser = os.environ.get("MIRAGE_BROWSER_TOKEN", "")
+        if not self.args.non_interactive and (not admin or not browser):
             with open("/dev/tty", "r+") as terminal:
-                token = getpass.getpass("Mirage administrator token: ", stream=terminal)
-        return token
+                if not admin:
+                    admin = getpass.getpass("Mirage administrator token: ", stream=terminal)
+                if not browser:
+                    browser = getpass.getpass("Mirage browser user token: ", stream=terminal)
+        validate_tokens(admin, browser)
+        os.environ["MIRAGE_API_TOKEN"] = admin
+        os.environ["MIRAGE_BROWSER_TOKEN"] = browser
+        return admin
 
     def http(self, port, path, method="GET", token=""):
         headers = {"Authorization": f"Bearer {token}"} if token else {}
@@ -368,15 +414,20 @@ class Installer:
         with urlopen(request, timeout=5) as response:
             return json.load(response)
 
-    def wait_health(self, port, deployment, image, token=""):
+    def wait_health(self, port, deployment, image, token="", allow_unauthorized=False):
         deadline = time.monotonic() + 60
         detail = None
         while time.monotonic() < deadline:
             try:
-                health = self.http(port, "/api/v1/health")
+                health = self.http(port, "/api/v1/health", token=token)
                 if health.get("deployment_id") != deployment or health.get("container_image") != image:
                     raise RuntimeError("candidate deployment or container image identity mismatch")
                 return health
+            except HTTPError as error:
+                if allow_unauthorized and error.code == 401:
+                    return {"authenticated": False}
+                detail = error
+                time.sleep(0.5)
             except Exception as error:
                 detail = error
                 time.sleep(0.5)
@@ -402,7 +453,7 @@ class Installer:
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
-        settings["server"] = {"host": "127.0.0.1", "port": port}
+        settings["server"] = {"mode": self.mode, "port": port}
         atomic_json(root / "config" / "settings.json", settings)
         return root, port
 
@@ -532,12 +583,12 @@ class Installer:
             self.intent("initialize-config")
             self.initialize_config()
             self.completed("initialize-config")
+            token = self.credentials()
             deployment, image, runtime = self.build()
             if not (self.data / "mirage.sqlite3").is_file():
                 self.intent("initialize-database")
                 self.offline_migrate(image, deployment)
                 self.completed("initialize-database")
-            token = self.credentials()
             self.intent("maintenance")
             enter_maintenance(self.data, self.operation_id)
             wait_for_writes(self.data)
@@ -628,7 +679,8 @@ class Installer:
                     self.stop_container("mirage")
             self.journal_path.unlink(missing_ok=True)
             self.journal = None
-            print(f"Mirage is ready: http://127.0.0.1:{port}\nCommand: {self.launcher}\nPersistent data: {self.data}")
+            exposure = "loopback only" if self.mode == "local" else "all interfaces"
+            print(f"Mirage is ready: http://127.0.0.1:{port}\nAccess mode: {self.mode} ({exposure})\nCommand: {self.launcher}\nPersistent data: {self.data}")
         except BaseException:
             self.recover()
             raise
@@ -680,6 +732,7 @@ class Installer:
                     original_state.get("deployment_id"),
                     original_state.get("app_image", {}).get("id"),
                     os.environ.get("MIRAGE_API_TOKEN", ""),
+                    allow_unauthorized=True,
                 )
         leave_maintenance(self.data, self.operation_id)
         if journal.get("original_state"):
@@ -751,6 +804,8 @@ def parser():
     result.add_argument("operation", nargs="?", default="install", choices=("install", "update", "remove"))
     result.add_argument("--data-dir")
     result.add_argument("--prefix")
+    result.add_argument("--port", type=port_number)
+    result.add_argument("--mode", choices=("local", "authenticated"))
     result.add_argument("--models")
     result.add_argument("--import-models")
     result.add_argument("--runtime", dest="engine", choices=("podman", "docker"))

@@ -22,7 +22,7 @@ def make_installer(tmp_path, arguments=None):
 def test_default_operation_and_option_precedence(tmp_path, monkeypatch):
     installer = make_installer(tmp_path)
     assert installer.args.operation == "install"
-    installer.state = {"data_dir": "/persisted", "prefix": "/old-prefix", "engine": "podman", "models": "moss"}
+    installer.state = {"data_dir": "/persisted", "prefix": "/old-prefix", "engine": "podman", "models": "moss", "server": {"mode": "authenticated", "port": 9000}}
     monkeypatch.setenv("MIRAGE_DATA_DIR", "/environment")
     monkeypatch.setenv("MIRAGE_PREFIX", "/env-prefix")
     monkeypatch.setenv("MIRAGE_MODELS", "qwen")
@@ -31,6 +31,20 @@ def test_default_operation_and_option_precedence(tmp_path, monkeypatch):
     assert installer.option("engine", "MIRAGE_CONTAINER_ENGINE", "engine", "docker") == "podman"
     installer.args.data_dir = "/explicit"
     assert installer.option("data_dir", "MIRAGE_DATA_DIR", "data_dir", "/default") == "/explicit"
+
+
+def test_server_option_precedence(tmp_path, monkeypatch):
+    installer = make_installer(tmp_path)
+    installer.state = {"server": {"mode": "authenticated", "port": 9000}}
+    installer.resolve_server_options()
+    assert (installer.mode, installer.port) == ("authenticated", 9000)
+    monkeypatch.setenv("MIRAGE_MODE", "local")
+    monkeypatch.setenv("MIRAGE_PORT", "9100")
+    installer.resolve_server_options()
+    assert (installer.mode, installer.port) == ("local", 9100)
+    explicit = make_installer(tmp_path, ["--mode", "authenticated", "--port", "9200"])
+    explicit.resolve_server_options()
+    assert (explicit.mode, explicit.port) == ("authenticated", 9200)
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="release fixture requires Git")
@@ -117,8 +131,9 @@ def test_verification_copy_reopens_admission_without_changing_live_database(tmp_
     data = tmp_path / "live"
     (data / "config").mkdir(parents=True)
     (data / "runtimes" / "releases" / "build-test" / "bin").mkdir(parents=True)
-    (data / "config" / "settings.json").write_text(json.dumps({"server": {"host": "127.0.0.1", "port": 8765}}))
+    (data / "config" / "settings.json").write_text(json.dumps({"server": {"mode": "local", "port": 8765}}))
     installer.data = data
+    installer.mode = "local"
     installer_module.connect_database(data).close()
     installer_module.enter_maintenance(data, installer.operation_id)
     connection = installer_module.connect_database(data)
@@ -135,3 +150,102 @@ def test_verification_copy_reopens_admission_without_changing_live_database(tmp_
     assert json.loads((data / "config" / "settings.json").read_text())["server"]["port"] == 8765
     live.close()
     copied.close()
+
+
+def test_container_publishes_local_port_without_host_networking(tmp_path, monkeypatch):
+    installer = make_installer(tmp_path)
+    installer.engine = "podman"
+    monkeypatch.setattr(installer, "engine_socket", lambda: "/tmp/podman.sock")
+    data = tmp_path / "data"
+    (data / "config").mkdir(parents=True)
+    settings = data / "config" / "settings.json"
+    settings.write_text(json.dumps({"server": {"mode": "local", "port": 9000}}))
+
+    arguments = installer.container_arguments("mirage", data, {"id": "image-id"}, "deployment")
+    assert "--network" not in arguments
+    assert arguments[arguments.index("--publish") + 1] == "127.0.0.1:9000:9000"
+    assert "MIRAGE_BIND_HOST=0.0.0.0" in arguments
+
+    settings.write_text(json.dumps({"server": {"mode": "authenticated", "port": 9100}}))
+    arguments = installer.container_arguments("mirage", data, {"id": "image-id"}, "deployment")
+    assert arguments[arguments.index("--publish") + 1] == "0.0.0.0:9100:9100"
+    arguments = installer.container_arguments("verifier", data, {"id": "image-id"}, "deployment", verify_only=True)
+    assert arguments[arguments.index("--publish") + 1] == "127.0.0.1:9100:9100"
+
+
+def test_authenticated_install_requires_both_valid_distinct_tokens(tmp_path, monkeypatch):
+    installer = make_installer(tmp_path, ["--mode", "authenticated", "--non-interactive"])
+    installer.mode = "authenticated"
+    monkeypatch.delenv("MIRAGE_API_TOKEN", raising=False)
+    monkeypatch.delenv("MIRAGE_BROWSER_TOKEN", raising=False)
+    with pytest.raises(RuntimeError, match="MIRAGE_API_TOKEN"):
+        installer.credentials()
+
+    monkeypatch.setenv("MIRAGE_API_TOKEN", "admin-secret_12345")
+    monkeypatch.setenv("MIRAGE_BROWSER_TOKEN", "admin-secret_12345")
+    with pytest.raises(RuntimeError, match="different"):
+        installer.credentials()
+
+    monkeypatch.setenv("MIRAGE_BROWSER_TOKEN", "browser-secret_12345")
+    assert installer.credentials() == "admin-secret_12345"
+    assert os.environ["MIRAGE_BROWSER_TOKEN"] == "browser-secret_12345"
+
+
+def test_local_install_does_not_require_tokens(tmp_path, monkeypatch):
+    installer = make_installer(tmp_path)
+    installer.mode = "local"
+    monkeypatch.delenv("MIRAGE_API_TOKEN", raising=False)
+    monkeypatch.delenv("MIRAGE_BROWSER_TOKEN", raising=False)
+    assert installer.credentials() == ""
+
+
+def test_first_party_service_paths_do_not_use_host_networking():
+    launcher = (ROOT / "bin" / "mirage").read_text()
+    installer = (ROOT / "install.py").read_text()
+    compose = (ROOT / "compose.yaml").read_text()
+    authenticated = (ROOT / "compose.authenticated.yaml").read_text()
+    assert "--network host" not in launcher
+    assert '"--network", "host"' not in installer
+    assert '--network "container:$NAME"' in launcher
+    assert "network_mode: host" not in compose + authenticated
+    assert "MIRAGE_PUBLISH_HOST" not in compose + authenticated
+    assert '127.0.0.1:${MIRAGE_PORT:-8765}:${MIRAGE_PORT:-8765}' in compose
+    assert '0.0.0.0:${MIRAGE_PORT:-8765}:${MIRAGE_PORT:-8765}' in authenticated
+
+
+def test_initialize_config_persists_access_mode_and_port(tmp_path):
+    installer = make_installer(tmp_path, ["--mode", "authenticated", "--port", "9000"])
+    installer.source = ROOT
+    installer.data = tmp_path / "data"
+    (installer.data / "config").mkdir(parents=True)
+    installer.mode = "authenticated"
+    installer.port = 9000
+    installer.initialize_config()
+    settings = json.loads((installer.data / "config" / "settings.json").read_text())
+    assert settings["server"] == {"mode": "authenticated", "port": 9000}
+    assert settings["queue"]["concurrency"] == 1
+
+
+def test_health_check_uses_admin_token(tmp_path, monkeypatch):
+    installer = make_installer(tmp_path)
+    calls = []
+
+    def response(port, path, method="GET", token=""):
+        calls.append(token)
+        return {"deployment_id": "deployment", "container_image": "image-id"}
+
+    monkeypatch.setattr(installer, "http", response)
+    assert installer.wait_health(8765, "deployment", "image-id", "admin-secret_12345")["deployment_id"] == "deployment"
+    assert calls == ["admin-secret_12345"]
+
+
+def test_recovery_health_check_accepts_rotated_credential_response(tmp_path, monkeypatch):
+    from urllib.error import HTTPError
+
+    installer = make_installer(tmp_path)
+
+    def unauthorized(port, path, method="GET", token=""):
+        raise HTTPError(path, 401, "Unauthorized", {}, None)
+
+    monkeypatch.setattr(installer, "http", unauthorized)
+    assert installer.wait_health(8765, "old-deployment", "old-image", "new-token", allow_unauthorized=True) == {"authenticated": False}

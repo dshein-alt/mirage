@@ -13,7 +13,7 @@ try:
     state = json.load(open(sys.argv[1], encoding="utf-8"))
 except (OSError, ValueError):
     state = {}
-for value in (state.get("data_dir", ""), state.get("engine", ""), state.get("app_image", {}).get("id", ""), state.get("deployment_id", ""), state.get("server", {}).get("port", 8765)):
+for value in (state.get("data_dir", ""), state.get("engine", ""), state.get("app_image", {}).get("id", ""), state.get("deployment_id", ""), state.get("server", {}).get("port", 8765), state.get("server", {}).get("mode", "local")):
     print(value)
 PY
     )
@@ -28,6 +28,9 @@ SOCKET=$(mirage_socket "$ENGINE")
 IMAGE=${STATE_VALUES[2]:-localhost/mirage-app:1}
 DEPLOYMENT_ID=${STATE_VALUES[3]:-development}
 PORT=${STATE_VALUES[4]:-8765}
+MODE=${STATE_VALUES[5]:-local}
+PUBLISH_HOST=0.0.0.0
+[[ "$MODE" == local ]] && PUBLISH_HOST=127.0.0.1
 NAME=mirage
 export MIRAGE_CONTAINER_ENGINE="$ENGINE"
 USERNS=()
@@ -49,11 +52,12 @@ service_args() {
         [[ -e "$device" ]] && dri+=("$device")
     done
     devices=$(IFS=,; echo "${dri[*]}")
-    local args=(--name "$NAME" --network host --read-only --tmpfs /tmp
+    local args=(--name "$NAME" --publish "$PUBLISH_HOST:$PORT:$PORT" --read-only --tmpfs /tmp
         --user "$(id -u):$(id -g)" "${USERNS[@]}"
         -v "$DATA:/data:rw" -v "$SOCKET:/run/engine.sock:rw"
         -e MIRAGE_DATA_DIR=/data -e "MIRAGE_HOST_DATA_DIR=$DATA"
         -e MIRAGE_ENGINE_SOCKET=/run/engine.sock -e "MIRAGE_CONTAINER_ENGINE=$ENGINE"
+        -e MIRAGE_BIND_HOST=0.0.0.0 -e "MIRAGE_MODE=$MODE" -e "MIRAGE_PORT=$PORT"
         -e "MIRAGE_HOST_UID=$(id -u)" -e "MIRAGE_HOST_GID=$(id -g)"
         -e "MIRAGE_HOST_GROUPS=$(id -G | tr ' ' ',')"
         -e HF_TOKEN -e MIRAGE_API_TOKEN -e MIRAGE_BROWSER_TOKEN
@@ -131,13 +135,13 @@ case "${1:-}" in
 esac
 
 start_service
-command=("$ENGINE" run --rm --network host --user "$(id -u):$(id -g)" "${USERNS[@]}"
+command=("$ENGINE" run --rm --network "container:$NAME" --user "$(id -u):$(id -g)" "${USERNS[@]}"
     -v "$PWD:/work:rw" -w /work -e "MIRAGE_API_URL=http://127.0.0.1:$PORT"
     -e "MIRAGE_API_TOKEN=${MIRAGE_API_TOKEN:-}" "$IMAGE" python -m mirage.cli "$@")
 
 if [[ "${1:-}" == generate ]]; then
     args=("$@")
-    command=("$ENGINE" run --rm --network host --user "$(id -u):$(id -g)" "${USERNS[@]}"
+    command=("$ENGINE" run --rm --network "container:$NAME" --user "$(id -u):$(id -g)" "${USERNS[@]}"
         -v "$PWD:/work:rw" -w /work -e "MIRAGE_API_URL=http://127.0.0.1:$PORT"
         -e "MIRAGE_API_TOKEN=${MIRAGE_API_TOKEN:-}" "$IMAGE")
     index=0

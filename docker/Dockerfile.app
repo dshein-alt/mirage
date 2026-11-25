@@ -26,7 +26,7 @@ FROM production AS development
 USER root
 RUN uv sync --locked --dev --no-editable
 COPY tests/ ./tests/
-COPY install.sh install.py ./
+COPY install.sh install.py compose.yaml compose.authenticated.yaml ./
 COPY bin/ ./bin/
 COPY scripts/ ./scripts/
 USER 1000:1000

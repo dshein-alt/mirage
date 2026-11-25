@@ -1,0 +1,26 @@
+services:
+  mirage:
+    image: ${MIRAGE_APP_IMAGE:?Set to the immutable application image ID or unique tag}
+    container_name: mirage
+    ports:
+      - "0.0.0.0:${MIRAGE_PORT:-8765}:${MIRAGE_PORT:-8765}"
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      MIRAGE_DATA_DIR: /data
+      MIRAGE_MODE: authenticated
+      MIRAGE_PORT: ${MIRAGE_PORT:-8765}
+      MIRAGE_HOST_DATA_DIR: ${MIRAGE_HOST_DATA_DIR:?Set the absolute host data directory}
+      MIRAGE_ENGINE_SOCKET: /run/engine.sock
+      MIRAGE_CONTAINER_ENGINE: ${MIRAGE_CONTAINER_ENGINE:-podman}
+      MIRAGE_BIND_HOST: 0.0.0.0
+      MIRAGE_DEPLOYMENT_ID: ${MIRAGE_DEPLOYMENT_ID:-compose}
+      MIRAGE_CONTAINER_IMAGE_ID: ${MIRAGE_APP_IMAGE}
+      HF_TOKEN: ${HF_TOKEN:-}
+      MIRAGE_API_TOKEN: ${MIRAGE_API_TOKEN:?Required in authenticated mode}
+      MIRAGE_BROWSER_TOKEN: ${MIRAGE_BROWSER_TOKEN:?Required in authenticated mode}
+    volumes:
+      - ${MIRAGE_HOST_DATA_DIR:?}:/data:rw
+      - ${CONTAINER_SOCKET:?Set to the host engine socket}:/run/engine.sock:rw
+    restart: unless-stopped
