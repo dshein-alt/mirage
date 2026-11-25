@@ -2,15 +2,19 @@ from copy import deepcopy
 
 import pytest
 
-from sd_workbench.config import ConfigService
-from sd_workbench.errors import WorkbenchError
-from sd_workbench.output import reserve_output
-from sd_workbench.util import read_json
+from mirage.config import ConfigService
+from mirage.errors import WorkbenchError
+from mirage.output import reserve_output
+from mirage.util import read_json
+
+
+def test_database_filename_is_mirage(paths):
+    assert paths.database.name == "mirage.sqlite3"
 
 
 def test_shipped_defaults_and_resolution(paths, registry):
     service = ConfigService(paths, registry)
-    resolved = service.resolve("qwen", "medium", "fast")
+    resolved = service.resolve("qwen", "sd", "fast")
     assert resolved["steps"] == 15
     assert resolved["width"] == resolved["height"] == 512
     assert resolved["cfg_scale"] == 6.0
@@ -34,7 +38,7 @@ def test_duplicate_json_key_is_rejected(paths, registry):
     paths.generation_config.write_text('{"schema_version":1,"schema_version":1}')
     with pytest.raises(WorkbenchError, match="duplicate"):
         service.reload()
-    assert service.snapshot()["document"]["schema_version"] == 1
+    assert service.snapshot()["document"]["schema_version"] == 2
 
 
 @pytest.mark.parametrize("field,value", [("width", 255), ("height", 0), ("steps", 251), ("cfg_scale", -1)])

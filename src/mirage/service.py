@@ -25,7 +25,10 @@ class Application:
         self.config = ConfigService(self.paths, self.registry)
         self.settings = self.config.settings()
         self.database = Database(self.paths.database)
+        if os.environ.get("MIRAGE_MAINTENANCE") == "1":
+            self.database.ensure_maintenance(os.environ.get("MIRAGE_DEPLOYMENT_ID", "installer"))
         self.media = MediaService(self.paths, self.database, self.settings["security"]["max_upload_bytes"])
+        self.media.backfill_dimensions()
         self.runtime = RuntimeManager(self.paths, self.settings)
         self.runner = ProcessRunner(self.paths, self.registry, self.settings, self.database, self.media)
         self.downloader = DownloadManager(self.registry, self.paths.downloads)
@@ -48,16 +51,30 @@ class Application:
         editing = bool(references)
         self.registry.verify(model, editing=editing)
         overrides = request.get("overrides", {})
-        if not isinstance(overrides, dict) or set(overrides) - {"width", "height", "steps", "cfg_scale", "sampler", "scheduler", "seed"}:
+        if "width" in request or "height" in request or (isinstance(overrides, dict) and set(overrides) & {"width", "height"}):
+            raise WorkbenchError("dimension_override", "Width and height overrides are not supported; choose sd, hd, or fhd")
+        if not isinstance(overrides, dict) or set(overrides) - {"steps", "cfg_scale", "sampler", "scheduler", "seed"}:
             raise WorkbenchError("overrides_invalid", "Unsupported generation override")
         resolved = self.config.resolve(model, request.get("resolution"), request.get("quality"), overrides)
         if resolved["seed"] is None:
             resolved["seed"] = secrets.randbelow(2147483648)
-        if os.environ.get("SDWB_FAKE_SD") == "1":
+        if os.environ.get("MIRAGE_FAKE_SD") == "1":
             revision = self.settings["runtime"]["minimum_sd_revision"]
+            manifest = {
+                "sd_cpp_commit": revision,
+                "build_id": f"fake-{revision[:12]}",
+                "runtime_image": {"reference": self.settings["runtime"]["image"], "id": self.settings["runtime"]["image"]},
+            }
         else:
-            revision = self.runtime.manifest()["revision"]
-        resolved["runtime_revision"] = revision
+            manifest = self.runtime.manifest()
+            revision = manifest["sd_cpp_commit"]
+        resolved.update({
+            "runtime_revision": revision,
+            "sd_cpp_commit": manifest["sd_cpp_commit"],
+            "runtime_build": manifest["build_id"],
+            "runtime_image_id": manifest["runtime_image"]["id"],
+            "runtime_image_reference": manifest["runtime_image"]["reference"],
+        })
         model_settings = self.settings["models"][model]
         profile_name = model_settings["backend_profile"]
         profile = self.settings["backend_profiles"][profile_name]
@@ -117,5 +134,8 @@ class Application:
             "disk": {"total": usage.total, "used": usage.used, "free": usage.free},
             "runtime": self.runtime.status(),
             "queue": {"active_gpu_jobs": 1 if (self.paths.data / ".active-job").exists() else 0, "concurrency": self.settings["queue"]["concurrency"]},
-            "fake_runner": os.environ.get("SDWB_FAKE_SD") == "1",
+            "maintenance": self.database.maintenance_status(),
+            "deployment_id": os.environ.get("MIRAGE_DEPLOYMENT_ID"),
+            "container_image": os.environ.get("MIRAGE_CONTAINER_IMAGE_ID"),
+            "fake_runner": os.environ.get("MIRAGE_FAKE_SD") == "1",
         }

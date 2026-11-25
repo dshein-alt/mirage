@@ -1,5 +1,9 @@
 from copy import deepcopy
+from datetime import datetime, timezone
 import math
+from pathlib import Path
+import shutil
+import sys
 import threading
 
 from .errors import WorkbenchError
@@ -18,6 +22,11 @@ SCHEDULERS = {
     "smoothstep", "kl_optimal", "lcm", "bong_tangent", "ltx2", "logit_normal",
     "flux2", "flux", "beta", "llada_image",
 }
+RESOLUTIONS = {
+    "sd": {"width": 512, "height": 512},
+    "hd": {"width": 1024, "height": 1024},
+    "fhd": {"width": 1920, "height": 1080},
+}
 
 
 class ConfigService:
@@ -27,6 +36,7 @@ class ConfigService:
         self._lock = threading.RLock()
         self._snapshot = None
         self._revision = None
+        self._warnings = []
         self.ensure()
 
     def ensure(self):
@@ -35,6 +45,13 @@ class ConfigService:
                 self.paths.generation_config,
                 read_json(self.paths.config_defaults / "generation-presets.default.json"),
             )
+        else:
+            try:
+                existing = read_json(self.paths.generation_config)
+            except (OSError, ValueError):
+                existing = None
+            if existing and existing.get("schema_version") == 1:
+                self.migrate_generation(existing)
         if not self.paths.settings.exists():
             atomic_write_json(
                 self.paths.settings,
@@ -42,11 +59,48 @@ class ConfigService:
             )
         self.reload()
 
+    def migration_warning(self, message):
+        self._warnings.append(message)
+        print(f"Mirage configuration migration: {message}", file=sys.stderr, flush=True)
+
+    def migrate_generation(self, legacy):
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        backup = self.paths.generation_config.with_name(f"generation-presets.pre-mirage-{timestamp}.json")
+        shutil.copy2(self.paths.generation_config, backup)
+        with backup.open("rb") as stream:
+            import os
+            os.fsync(stream.fileno())
+        defaults = deepcopy(legacy["defaults"])
+        original = defaults.get("resolution")
+        stock_mapping = {"small": "sd", "medium": "sd", "large": "hd", "hd": "hd"}
+        if original in stock_mapping:
+            defaults["resolution"] = stock_mapping[original]
+        else:
+            size = legacy.get("resolutions", {}).get(original, {})
+            pair = (size.get("width"), size.get("height"))
+            defaults["resolution"] = next(
+                (name for name, dimensions in RESOLUTIONS.items() if pair == (dimensions["width"], dimensions["height"])),
+                "hd",
+            )
+        document = {
+            "schema_version": 2,
+            "defaults": defaults,
+            "resolutions": deepcopy(RESOLUTIONS),
+            "models": deepcopy(legacy["models"]),
+        }
+        candidate = self.validate(document, self.registry)
+        atomic_write_json(self.paths.generation_config, candidate)
+        self.migration_warning(f"generation presets were backed up to {backup.name}")
+        if original not in stock_mapping and defaults["resolution"] == "hd":
+            original_size = legacy.get("resolutions", {}).get(original, {})
+            if (original_size.get("width"), original_size.get("height")) != (1024, 1024):
+                self.migration_warning("the previous default size is unsupported; HD 1024×1024 is now the default")
+
     @staticmethod
     def validate(document, registry):
         try:
-            if document["schema_version"] != 1:
-                raise ValueError("schema_version must be 1")
+            if document["schema_version"] != 2:
+                raise ValueError("schema_version must be 2")
             defaults = document["defaults"]
             resolutions = document["resolutions"]
             models = document["models"]
@@ -58,17 +112,13 @@ class ConfigService:
                 raise ValueError("defaults.resolution is unknown")
             if defaults["quality"] not in models[defaults["model"]]["quality"]:
                 raise ValueError("defaults.quality is unknown for the default model")
-            if not resolutions:
-                raise ValueError("at least one resolution is required")
-            for resolution_id, resolution in resolutions.items():
-                if not resolution_id or not isinstance(resolution, dict):
-                    raise ValueError("resolution IDs must be non-empty")
-                for dimension in ("width", "height"):
-                    value = resolution[dimension]
-                    if isinstance(value, bool) or not isinstance(value, int) or not 64 <= value <= 4096:
-                        raise ValueError(f"resolutions.{resolution_id}.{dimension} must be an integer from 64 to 4096")
-                    if value % 32:
-                        raise ValueError(f"resolutions.{resolution_id}.{dimension} must be divisible by 32")
+            if set(resolutions) != set(RESOLUTIONS):
+                raise ValueError("resolutions must contain exactly: sd, hd, fhd")
+            for resolution_id, expected in RESOLUTIONS.items():
+                if resolutions[resolution_id] != expected:
+                    raise ValueError(
+                        f"resolutions.{resolution_id} must be exactly {expected['width']}×{expected['height']}"
+                    )
             for model_id, model in models.items():
                 quality = model["quality"]
                 if not quality or model["default_quality"] not in quality:
@@ -101,7 +151,7 @@ class ConfigService:
 
     def snapshot(self):
         with self._lock:
-            return {"document": deepcopy(self._snapshot), "revision": self._revision}
+            return {"document": deepcopy(self._snapshot), "revision": self._revision, "warnings": list(self._warnings)}
 
     def update(self, document):
         candidate = self.validate(document, self.registry)
@@ -128,12 +178,14 @@ class ConfigService:
             raise WorkbenchError("quality_unknown", f"Quality {quality_id} is not defined for {model_id}")
         resolution = document["resolutions"][resolution_id]
         overrides = overrides or {}
+        if set(overrides) & {"width", "height"}:
+            raise WorkbenchError("dimension_override", "Width and height overrides are not supported; choose sd, hd, or fhd")
         result = {
             "model": model_id,
             "resolution": resolution_id,
             "quality": quality_id,
-            "width": overrides.get("width", resolution["width"]),
-            "height": overrides.get("height", resolution["height"]),
+            "width": resolution["width"],
+            "height": resolution["height"],
             "steps": overrides.get("steps", model["quality"][quality_id]["steps"]),
             "cfg_scale": overrides.get("cfg_scale", model["cfg_scale"]),
             "sampler": overrides.get("sampler", model["sampler"]),
@@ -141,10 +193,6 @@ class ConfigService:
             "seed": overrides.get("seed"),
             "config_revision": snapshot["revision"],
         }
-        for dimension in ("width", "height"):
-            value = result[dimension]
-            if isinstance(value, bool) or not isinstance(value, int) or not 64 <= value <= 4096 or value % 32:
-                raise WorkbenchError("dimension_invalid", f"{dimension} must be divisible by 32 and between 64 and 4096")
         if isinstance(result["steps"], bool) or not isinstance(result["steps"], int) or not 1 <= result["steps"] <= 250:
             raise WorkbenchError("steps_invalid", "steps must be an integer from 1 to 250")
         cfg = result["cfg_scale"]

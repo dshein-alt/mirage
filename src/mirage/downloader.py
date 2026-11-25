@@ -71,7 +71,7 @@ class DownloadManager:
             if cancel and cancel.is_set():
                 raise WorkbenchError("download_cancelled", "Model installation cancelled", 409)
             offset = partial.stat().st_size if partial.exists() else 0
-            headers = {"User-Agent": "sd-workbench/1.0", "Accept-Encoding": "identity"}
+            headers = {"User-Agent": "mirage/1.0", "Accept-Encoding": "identity"}
             if self.token:
                 headers["Authorization"] = f"Bearer {self.token}"
             if offset:

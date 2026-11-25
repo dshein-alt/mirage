@@ -4,14 +4,14 @@ import os
 
 import pytest
 
-from sd_workbench.errors import WorkbenchError
-from sd_workbench.runtime_manager import RuntimeManager
+from mirage.errors import WorkbenchError
+from mirage.runtime_manager import RuntimeManager
 
 
 class FakeEngine:
     engine = "podman"
 
-    def ensure_runtime_image(self, image, dockerfile):
+    def require_runtime_image(self, image):
         pass
 
     def run_short(self, args, devices=False):
@@ -30,7 +30,7 @@ def test_runtime_verifies_exported_artifacts(paths):
     (paths.data / "runtimes" / "current").symlink_to("releases/test")
     settings = {"runtime": {"image": "test"}}
     manager = RuntimeManager(paths, settings, FakeEngine())
-    manager.run_short = lambda args, devices=False: "sd.cpp fake runtime"
+    manager.run_short = lambda args, devices=False, revision=None, image=None: "sd.cpp fake runtime"
     assert manager.verify()["verified"]
     binary.write_bytes(b"broken")
     with pytest.raises(WorkbenchError, match="wrong size|checksum"):
@@ -46,6 +46,7 @@ def test_runtime_activation_preserves_previous(paths):
         (releases / revision / "bin" / "sd-server").touch()
     paths.runtime_current.symlink_to("releases/one")
     manager = RuntimeManager(paths, {"runtime": {"image": "test"}}, FakeEngine())
+    manager.run_short = lambda args, devices=False, revision=None, image=None: "sd.cpp fake runtime"
     manager.activate("two")
     assert os.readlink(paths.runtime_current) == "releases/two"
     manager.rollback()

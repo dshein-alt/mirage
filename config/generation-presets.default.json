@@ -1,11 +1,10 @@
 {
-  "schema_version": 1,
-  "defaults": {"model": "zimage", "resolution": "large", "quality": "high"},
+  "schema_version": 2,
+  "defaults": {"model": "zimage", "resolution": "hd", "quality": "high"},
   "resolutions": {
-    "small": {"width": 256, "height": 256},
-    "medium": {"width": 512, "height": 512},
-    "large": {"width": 768, "height": 768},
-    "hd": {"width": 1024, "height": 1024}
+    "sd": {"width": 512, "height": 512},
+    "hd": {"width": 1024, "height": 1024},
+    "fhd": {"width": 1920, "height": 1080}
   },
   "models": {
     "moss": {

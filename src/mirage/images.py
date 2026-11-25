@@ -48,23 +48,58 @@ class MediaService:
             raise WorkbenchError("input_missing", "Reference image file is missing", 500)
         return path
 
+    def delete_input(self, input_id):
+        record = self.database.delete_input(input_id)
+        path = (self.paths.inputs / record["filename"]).resolve()
+        if path.parent != self.paths.inputs.resolve():
+            raise WorkbenchError("input_missing", "Reference image path is invalid", 500)
+        path.unlink(missing_ok=True)
+        return record
+
     @staticmethod
     def _fsync(path):
         with path.open("rb") as stream:
             os.fsync(stream.fileno())
 
-    def publish(self, job, temporary, final):
+    def prepare_output(self, job, temporary):
+        cropped_path = None
         try:
             with Image.open(temporary) as image:
                 image.verify()
             with Image.open(temporary) as image:
                 if image.format != "PNG":
                     raise WorkbenchError("output_invalid", "sd-cli did not produce a PNG", 500)
+                resolved = job["resolved"]
+                if resolved.get("resolution") == "fhd":
+                    requested = (resolved["width"], resolved["height"])
+                    if image.width < requested[0] or image.height < requested[1]:
+                        raise WorkbenchError(
+                            "output_dimensions",
+                            f"sd-cli produced {image.width}×{image.height}, smaller than requested {requested[0]}×{requested[1]}",
+                            500,
+                        )
+                    if image.size != requested:
+                        left = (image.width - requested[0]) // 2
+                        top = (image.height - requested[1]) // 2
+                        cropped = image.crop((left, top, left + requested[0], top + requested[1]))
+                        cropped_path = temporary.with_name(f".{temporary.stem}.{uuid.uuid4().hex}.crop.png")
+                        cropped.save(cropped_path, "PNG")
+                        self._fsync(cropped_path)
+                        os.replace(cropped_path, temporary)
+            with Image.open(temporary) as image:
                 thumbnail_image = image.convert("RGB")
                 thumbnail_image.thumbnail((384, 384))
-        except (UnidentifiedImageError, OSError) as error:
+            return thumbnail_image
+        except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
             raise WorkbenchError("output_invalid", "sd-cli produced an unreadable output image", 500) from error
+        finally:
+            if cropped_path is not None:
+                cropped_path.unlink(missing_ok=True)
+
+    def publish(self, job, temporary, final):
+        thumbnail_image = self.prepare_output(job, temporary)
         image_id = str(uuid.uuid4())
+        sha256 = file_sha256(temporary)
         metadata = {
             **job["resolved"],
             "prompt": job["request"]["prompt"],
@@ -72,6 +107,7 @@ class MediaService:
             "job_id": job["id"],
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "elapsed_seconds": job.get("duration_seconds"),
+            "sha256": sha256,
         }
         thumbnail = self.paths.thumbnails / f"{final.stem}.jpg"
         thumbnail_temp = self.paths.thumbnails / f".{final.stem}.{image_id}.tmp.jpg"
@@ -88,7 +124,7 @@ class MediaService:
             "thumbnail_temp": thumbnail_temp.name,
             "sidecar_temp": sidecar_temp.name,
             "metadata": metadata,
-            "sha256": file_sha256(temporary),
+            "sha256": sha256,
             "duration_seconds": job.get("duration_seconds"),
         }
         thumbnail_image.save(thumbnail_temp, "JPEG", quality=88)
@@ -154,6 +190,22 @@ class MediaService:
         if path.parent != self.paths.thumbnails.resolve() or not path.is_file():
             raise WorkbenchError("thumbnail_missing", "Thumbnail is missing", 404)
         return path
+
+    def backfill_dimensions(self):
+        verified = []
+        for record in self.database.unverified_images():
+            path = self.paths.outputs / record["filename"]
+            try:
+                with Image.open(path) as image:
+                    if image.format != "PNG":
+                        continue
+                    width, height = image.size
+                    image.verify()
+            except (OSError, UnidentifiedImageError, Image.DecompressionBombError):
+                continue
+            self.database.verify_image_dimensions(record["id"], width, height)
+            verified.append(record["id"])
+        return verified
 
     def reindex(self):
         imported = []

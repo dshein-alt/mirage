@@ -13,8 +13,8 @@ from .errors import WorkbenchError
 
 class Client:
     def __init__(self):
-        self.base = os.environ.get("SDWB_API_URL", "http://127.0.0.1:8765").rstrip("/") + "/api/v1"
-        self.token = os.environ.get("SDWB_API_TOKEN")
+        self.base = os.environ.get("MIRAGE_API_URL", "http://127.0.0.1:8765").rstrip("/") + "/api/v1"
+        self.token = os.environ.get("MIRAGE_API_TOKEN")
 
     def request(self, method, path, body=None, raw=False, expect_json=True):
         headers = {"Accept": "application/json"}
@@ -42,7 +42,7 @@ class Client:
             except (ValueError, KeyError):
                 raise WorkbenchError("http_error", f"HTTP {error.code}", error.code) from error
         except URLError as error:
-            raise WorkbenchError("service_unavailable", f"Cannot reach SD Workbench at {self.base}: {error.reason}. Run: sdwb serve", 503) from error
+            raise WorkbenchError("service_unavailable", f"Cannot reach Mirage at {self.base}: {error.reason}. Run: mirage serve", 503) from error
 
     def upload(self, path):
         content = Path(path).read_bytes()
@@ -73,7 +73,7 @@ def wait(client, job_id, as_json=False):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="sdwb", description="Local stable-diffusion.cpp workbench")
+    parser = argparse.ArgumentParser(prog="mirage", description="Local stable-diffusion.cpp workbench")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON")
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -86,8 +86,6 @@ def build_parser():
     generate.add_argument("--seed", type=int)
     generate.add_argument("--steps", type=int)
     generate.add_argument("--cfg-scale", type=float)
-    generate.add_argument("--width", type=int)
-    generate.add_argument("--height", type=int)
     generate.add_argument("--sampler")
     generate.add_argument("--scheduler")
     mode = generate.add_mutually_exclusive_group()
@@ -113,6 +111,8 @@ def build_parser():
     gallery_list.add_argument("--model", choices=("moss", "qwen", "zimage"))
     gallery_list.add_argument("--resolution")
     gallery_list.add_argument("--quality")
+    gallery_list.add_argument("--width", type=int)
+    gallery_list.add_argument("--height", type=int)
     gallery_export = gallery_commands.add_parser("export")
     gallery_export.add_argument("id")
     gallery_export.add_argument("destination", type=Path)
@@ -150,7 +150,7 @@ def run(args):
     client = Client()
     if args.command == "generate":
         references = [client.upload(path)["id"] for path in args.ref]
-        overrides = {key: getattr(args, key) for key in ("seed", "steps", "width", "height", "sampler", "scheduler") if getattr(args, key) is not None}
+        overrides = {key: getattr(args, key) for key in ("seed", "steps", "sampler", "scheduler") if getattr(args, key) is not None}
         if args.cfg_scale is not None:
             overrides["cfg_scale"] = args.cfg_scale
         request = {"prompt": args.prompt, "reference_ids": references, "overrides": overrides}
@@ -175,7 +175,7 @@ def run(args):
             return wait(client, args.id, args.json)
     if args.command == "gallery":
         if args.action == "list":
-            query = urlencode({key: value for key, value in (("search", args.search), ("model", args.model), ("resolution", args.resolution), ("quality", args.quality)) if value})
+            query = urlencode({key: value for key, value in (("search", args.search), ("model", args.model), ("resolution", args.resolution), ("quality", args.quality), ("width", args.width), ("height", args.height)) if value})
             return emit(client.request("GET", "/images" + (f"?{query}" if query else "")), args.json)
         if args.action == "reindex":
             return emit(client.request("POST", "/gallery/reindex"), args.json)
@@ -219,13 +219,13 @@ def main():
         run(args)
         return 0
     except WorkbenchError as error:
-        print(f"sdwb: {error.code}: {error.message}", file=sys.stderr)
+        print(f"mirage: {error.code}: {error.message}", file=sys.stderr)
         return 3 if error.status < 500 else 4
     except (OSError, ValueError) as error:
-        print(f"sdwb: {error}", file=sys.stderr)
+        print(f"mirage: {error}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
-        print("sdwb: client stopped; queued/running jobs were not cancelled", file=sys.stderr)
+        print("mirage: client stopped; queued/running jobs were not cancelled", file=sys.stderr)
         return 130
 
 

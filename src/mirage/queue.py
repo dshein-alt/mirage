@@ -27,7 +27,7 @@ class JobQueue:
         if interrupted:
             print(f"Marked {interrupted} interrupted job(s); retry them explicitly", flush=True)
         for kind in ("generation", "model_install"):
-            thread = threading.Thread(target=self.worker, args=(kind,), name=f"sdwb-{kind}", daemon=True)
+            thread = threading.Thread(target=self.worker, args=(kind,), name=f"mirage-{kind}", daemon=True)
             thread.start()
             self.threads.append(thread)
 

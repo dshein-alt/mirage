@@ -17,7 +17,7 @@ class ProcessRunner:
         self.database = database
         self.media = media
         self.engine = engine or EngineClient()
-        self.fake = os.environ.get("SDWB_FAKE_SD") == "1"
+        self.fake = os.environ.get("MIRAGE_FAKE_SD") == "1"
 
     def run(self, job, cancel_event):
         started = time.monotonic()
@@ -31,7 +31,9 @@ class ProcessRunner:
         try:
             with log_path.open("w", encoding="utf-8") as log:
                 command = self.command(job, temporary)
-                log.write("sd.cpp revision: " + str(resolved.get("runtime_revision")) + "\n")
+                log.write("sd.cpp commit: " + str(resolved.get("sd_cpp_commit")) + "\n")
+                log.write("Runtime build: " + str(resolved.get("runtime_build")) + "\n")
+                log.write("Runtime image: " + str(resolved.get("runtime_image_id")) + "\n")
                 log.write("Arguments: " + " ".join(self.redact_argument(arg) for arg in command) + "\n")
                 log.flush()
                 if self.fake:
@@ -98,28 +100,28 @@ class ProcessRunner:
             time.sleep(0.005)
         image = Image.new("RGB", (job["resolved"]["width"], job["resolved"]["height"]), (35, 90, 120))
         image.save(temporary, "PNG")
-        log.write("VAE decode complete\nSaved fake PNG (SDWB_FAKE_SD=1)\n")
+        log.write("VAE decode complete\nSaved fake PNG (MIRAGE_FAKE_SD=1)\n")
 
     def run_container(self, job, command, log, cancel_event):
-        host_data = Path(os.environ.get("SDWB_HOST_DATA_DIR", str(self.paths.data)))
-        image = self.settings["runtime"]["image"]
-        dockerfile = Path("/app/docker/Dockerfile.runtime")
-        if not dockerfile.is_file():
-            dockerfile = Path(__file__).resolve().parents[2] / "docker" / "Dockerfile.runtime"
-        self.engine.ensure_runtime_image(image, dockerfile)
-        configured_devices = os.environ.get("SDWB_DRI_DEVICES", "")
+        resolved = job["resolved"]
+        host_data = Path(os.environ.get("MIRAGE_HOST_DATA_DIR", str(self.paths.data)))
+        image = resolved.get("runtime_image_id")
+        if not image:
+            raise WorkbenchError("runtime_image_missing", "The job has no recorded immutable runtime image", 500)
+        self.engine.require_runtime_image(image)
+        configured_devices = os.environ.get("MIRAGE_DRI_DEVICES", "")
         devices = [Path(value) for value in configured_devices.split(",") if value]
-        if not devices and os.environ.get("SDWB_ALLOW_NO_GPU") != "1":
+        if not devices and os.environ.get("MIRAGE_ALLOW_NO_GPU") != "1":
             raise WorkbenchError("gpu_unavailable", "No /dev/dri GPU devices are visible. Check device permissions and Vulkan setup", 503)
-        revision = job["resolved"]["runtime_revision"]
-        if Path(revision).name != revision:
-            raise WorkbenchError("runtime_invalid", "Invalid runtime revision in job snapshot", 500)
-        release_bin = self.paths.data / "runtimes" / "releases" / revision / "bin"
+        build_id = resolved.get("runtime_build")
+        if not build_id or Path(build_id).name != build_id:
+            raise WorkbenchError("runtime_invalid", "Invalid runtime build in job snapshot", 500)
+        release_bin = self.paths.data / "runtimes" / "releases" / build_id / "bin"
         if not (release_bin / "sd-cli").is_file():
-            raise WorkbenchError("runtime_missing", f"Runtime release required by this job is unavailable: {revision}", 500)
-        name = f"sdwb-job-{job['id'][:12]}"
+            raise WorkbenchError("runtime_missing", f"Runtime release required by this job is unavailable: {build_id}", 500)
+        name = f"mirage-job-{job['id'][:12]}"
         binds = [
-            f"{host_data / 'runtimes' / 'releases' / revision / 'bin'}:/opt/sd/bin:ro",
+            f"{host_data / 'runtimes' / 'releases' / build_id / 'bin'}:/opt/sd/bin:ro",
             f"{host_data / 'models'}:/models:ro",
             f"{host_data / 'inputs'}:/inputs:ro",
             f"{host_data / 'outputs'}:/output:rw",

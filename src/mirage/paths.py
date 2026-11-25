@@ -13,9 +13,9 @@ class Paths:
     def from_environment(cls):
         source = Path(__file__).resolve().parents[2]
         return cls(
-            data=Path(os.environ.get("SDWB_DATA_DIR", source / "data")).resolve(),
-            config_defaults=Path(os.environ.get("SDWB_CONFIG_DIR", source / "config")).resolve(),
-            web=Path(os.environ.get("SDWB_WEB_DIR", source / "web")).resolve(),
+            data=Path(os.environ.get("MIRAGE_DATA_DIR", source / "data")).resolve(),
+            config_defaults=Path(os.environ.get("MIRAGE_CONFIG_DIR", source / "config")).resolve(),
+            web=Path(os.environ.get("MIRAGE_WEB_DIR", source / "web")).resolve(),
         )
 
     def __post_init__(self):
@@ -44,7 +44,7 @@ class Paths:
 
     @property
     def database(self):
-        return self.data / "workbench.sqlite3"
+        return self.data / "mirage.sqlite3"
 
     @property
     def generation_config(self):

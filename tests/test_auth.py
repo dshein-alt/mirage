@@ -2,8 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from sd_workbench.auth import AuthContext, AuthService, SESSION_COOKIE
-from sd_workbench.errors import WorkbenchError
+from mirage.auth import AuthContext, AuthService, SESSION_COOKIE
+from mirage.errors import WorkbenchError
 
 
 class Request:
@@ -15,8 +15,8 @@ class Request:
 
 
 def test_browser_session_and_bearer_roles(monkeypatch):
-    monkeypatch.setenv("SDWB_API_TOKEN", "admin-secret")
-    monkeypatch.setenv("SDWB_BROWSER_TOKEN", "browser-secret")
+    monkeypatch.setenv("MIRAGE_API_TOKEN", "admin-secret")
+    monkeypatch.setenv("MIRAGE_BROWSER_TOKEN", "browser-secret")
     service = AuthService()
     session_id, context = service.login("browser-secret")
     assert context.role == "user"
@@ -33,7 +33,7 @@ def test_browser_session_and_bearer_roles(monkeypatch):
 
 
 def test_invalid_login_and_expired_session(monkeypatch):
-    monkeypatch.setenv("SDWB_API_TOKEN", "admin-secret")
+    monkeypatch.setenv("MIRAGE_API_TOKEN", "admin-secret")
     service = AuthService()
     with pytest.raises(WorkbenchError):
         service.login("wrong")

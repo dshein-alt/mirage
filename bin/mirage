@@ -3,13 +3,33 @@ set -euo pipefail
 
 SOURCE=$(readlink -f "${BASH_SOURCE[0]}")
 ROOT=$(CDPATH= cd -- "$(dirname -- "$SOURCE")/.." && pwd)
-DATA=${SDWB_DATA_DIR:-$ROOT/data}
+STATE_FILE=${MIRAGE_STATE_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/mirage/installation.json}
+STATE_VALUES=()
+if [[ -f "$STATE_FILE" ]]; then
+    mapfile -t STATE_VALUES < <(python3 - "$STATE_FILE" <<'PY'
+import json
+import sys
+try:
+    state = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, ValueError):
+    state = {}
+for value in (state.get("data_dir", ""), state.get("engine", ""), state.get("app_image", {}).get("id", ""), state.get("deployment_id", ""), state.get("server", {}).get("port", 8765)):
+    print(value)
+PY
+    )
+fi
+DATA=${MIRAGE_DATA_DIR:-${STATE_VALUES[0]:-$ROOT/data}}
+if [[ -z "${MIRAGE_CONTAINER_ENGINE:-}" && -n "${STATE_VALUES[1]:-}" ]]; then
+    export MIRAGE_CONTAINER_ENGINE=${STATE_VALUES[1]}
+fi
 . "$ROOT/scripts/common.sh"
-ENGINE=$(sdwb_engine)
-SOCKET=$(sdwb_socket "$ENGINE")
-IMAGE=localhost/sd-workbench-app:1
-NAME=sd-workbench
-export SDWB_CONTAINER_ENGINE="$ENGINE"
+ENGINE=$(mirage_engine)
+SOCKET=$(mirage_socket "$ENGINE")
+IMAGE=${STATE_VALUES[2]:-localhost/mirage-app:1}
+DEPLOYMENT_ID=${STATE_VALUES[3]:-development}
+PORT=${STATE_VALUES[4]:-8765}
+NAME=mirage
+export MIRAGE_CONTAINER_ENGINE="$ENGINE"
 USERNS=()
 if [[ "$ENGINE" == podman ]]; then
     USERNS=(--userns=keep-id)
@@ -32,14 +52,15 @@ service_args() {
     local args=(--name "$NAME" --network host --read-only --tmpfs /tmp
         --user "$(id -u):$(id -g)" "${USERNS[@]}"
         -v "$DATA:/data:rw" -v "$SOCKET:/run/engine.sock:rw"
-        -e SDWB_DATA_DIR=/data -e "SDWB_HOST_DATA_DIR=$DATA"
-        -e SDWB_ENGINE_SOCKET=/run/engine.sock -e "SDWB_CONTAINER_ENGINE=$ENGINE"
-        -e "SDWB_HOST_UID=$(id -u)" -e "SDWB_HOST_GID=$(id -g)"
-        -e "SDWB_HOST_GROUPS=$(id -G | tr ' ' ',')"
-        -e "HF_TOKEN=${HF_TOKEN:-}" -e "SDWB_API_TOKEN=${SDWB_API_TOKEN:-}"
-        -e "SDWB_BROWSER_TOKEN=${SDWB_BROWSER_TOKEN:-}"
-        -e "SDWB_FAKE_SD=${SDWB_FAKE_SD:-0}" -e "SDWB_ALLOW_NO_GPU=${SDWB_ALLOW_NO_GPU:-0}"
-        -e "SDWB_DRI_DEVICES=$devices")
+        -e MIRAGE_DATA_DIR=/data -e "MIRAGE_HOST_DATA_DIR=$DATA"
+        -e MIRAGE_ENGINE_SOCKET=/run/engine.sock -e "MIRAGE_CONTAINER_ENGINE=$ENGINE"
+        -e "MIRAGE_HOST_UID=$(id -u)" -e "MIRAGE_HOST_GID=$(id -g)"
+        -e "MIRAGE_HOST_GROUPS=$(id -G | tr ' ' ',')"
+        -e HF_TOKEN -e MIRAGE_API_TOKEN -e MIRAGE_BROWSER_TOKEN
+        -e "MIRAGE_DEPLOYMENT_ID=$DEPLOYMENT_ID" -e "MIRAGE_CONTAINER_IMAGE_ID=$IMAGE"
+        -e "MIRAGE_HEALTH_PORT=$PORT"
+        -e "MIRAGE_FAKE_SD=${MIRAGE_FAKE_SD:-0}" -e "MIRAGE_ALLOW_NO_GPU=${MIRAGE_ALLOW_NO_GPU:-0}"
+        -e "MIRAGE_DRI_DEVICES=$devices")
     if [[ "$ENGINE" == docker ]]; then
         args+=(--group-add "$(stat -c %g "$SOCKET")")
     fi
@@ -58,19 +79,19 @@ start_service() {
     "$ENGINE" run -d "${args[@]}" "$IMAGE" >/dev/null
     local attempt
     for attempt in {1..30}; do
-        if "$ENGINE" exec --user "$(id -u):$(id -g)" "$NAME" python -c 'import os; from urllib.request import Request, urlopen; urlopen(Request("http://127.0.0.1:8765/api/v1/health", headers={"Authorization": "Bearer " + os.environ.get("SDWB_API_TOKEN", "")}), timeout=1)' >/dev/null 2>&1; then
+        if "$ENGINE" exec --user "$(id -u):$(id -g)" "$NAME" python -c 'import os; from urllib.request import Request, urlopen; urlopen(Request("http://127.0.0.1:" + os.environ.get("MIRAGE_HEALTH_PORT", "8765") + "/api/v1/health", headers={"Authorization": "Bearer " + os.environ.get("MIRAGE_API_TOKEN", "")}), timeout=1)' >/dev/null 2>&1; then
             return
         fi
         sleep 1
     done
-    echo "sdwb: service did not become healthy; inspect: $ENGINE logs $NAME" >&2
+    echo "mirage: service did not become healthy; inspect: $ENGINE logs $NAME" >&2
     return 1
 }
 
 case "${1:-}" in
     serve)
         if service_running; then
-            echo "SD Workbench: http://127.0.0.1:8765"
+            echo "Mirage: http://127.0.0.1:$PORT"
             exec "$ENGINE" logs -f "$NAME"
         fi
         if service_exists; then
@@ -81,7 +102,7 @@ case "${1:-}" in
         ;;
     start)
         start_service
-        echo "SD Workbench: http://127.0.0.1:8765"
+        echo "Mirage: http://127.0.0.1:$PORT"
         exit
         ;;
     stop)
@@ -99,9 +120,9 @@ case "${1:-}" in
     runtime)
         if [[ "${2:-}" == build ]]; then
             shift 2
-            exec "$ROOT/scripts/runtime-build.sh" "${1:-532d2c15c430a785a712b2d94281f04e733008a4}"
+            exec "$ROOT/scripts/runtime-build.sh" "${1:-79dc7ca9074d79419a46380cdb95a4524db9b74c}" --activate
         elif [[ "${2:-}" == repair ]]; then
-            exec "$ROOT/scripts/runtime-build.sh" "${3:-532d2c15c430a785a712b2d94281f04e733008a4}"
+            exec "$ROOT/scripts/runtime-build.sh" "${3:-79dc7ca9074d79419a46380cdb95a4524db9b74c}" --activate
         fi
         ;;
     backup)
@@ -111,23 +132,23 @@ esac
 
 start_service
 command=("$ENGINE" run --rm --network host --user "$(id -u):$(id -g)" "${USERNS[@]}"
-    -v "$PWD:/work:rw" -w /work -e "SDWB_API_URL=http://127.0.0.1:8765"
-    -e "SDWB_API_TOKEN=${SDWB_API_TOKEN:-}" "$IMAGE" python -m sd_workbench.cli "$@")
+    -v "$PWD:/work:rw" -w /work -e "MIRAGE_API_URL=http://127.0.0.1:$PORT"
+    -e "MIRAGE_API_TOKEN=${MIRAGE_API_TOKEN:-}" "$IMAGE" python -m mirage.cli "$@")
 
 if [[ "${1:-}" == generate ]]; then
     args=("$@")
     command=("$ENGINE" run --rm --network host --user "$(id -u):$(id -g)" "${USERNS[@]}"
-        -v "$PWD:/work:rw" -w /work -e "SDWB_API_URL=http://127.0.0.1:8765"
-        -e "SDWB_API_TOKEN=${SDWB_API_TOKEN:-}" "$IMAGE")
+        -v "$PWD:/work:rw" -w /work -e "MIRAGE_API_URL=http://127.0.0.1:$PORT"
+        -e "MIRAGE_API_TOKEN=${MIRAGE_API_TOKEN:-}" "$IMAGE")
     index=0
     expect_ref=0
     rewritten=()
     for arg in "${args[@]}"; do
         if (( expect_ref )); then
             ref=$(realpath "$arg")
-            [[ -f "$ref" ]] || { echo "sdwb: reference not found: $ref" >&2; exit 2; }
+            [[ -f "$ref" ]] || { echo "mirage: reference not found: $ref" >&2; exit 2; }
             index=$((index + 1))
-            mount="/sdwb-reference-$index"
+            mount="/mirage-reference-$index"
             command+=(-v "$(dirname "$ref"):$mount:ro")
             rewritten+=("$mount/$(basename "$ref")")
             expect_ref=0
@@ -136,7 +157,7 @@ if [[ "${1:-}" == generate ]]; then
             [[ "$arg" == --ref ]] && expect_ref=1
         fi
     done
-    command+=(python -m sd_workbench.cli "${rewritten[@]}")
+    command+=(python -m mirage.cli "${rewritten[@]}")
 fi
 
 exec "${command[@]}"

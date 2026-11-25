@@ -1,4 +1,4 @@
-from sd_workbench.progress import parse_progress, parse_stage
+from mirage.progress import parse_progress, parse_stage
 
 
 def test_progress_is_opportunistic():

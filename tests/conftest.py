@@ -4,9 +4,9 @@ import time
 
 import pytest
 
-from sd_workbench.manifest import ModelRegistry
-from sd_workbench.paths import Paths
-from sd_workbench.service import Application
+from mirage.manifest import ModelRegistry
+from mirage.paths import Paths
+from mirage.service import Application
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -23,7 +23,7 @@ def registry(paths):
 
 @pytest.fixture
 def app(paths, monkeypatch):
-    monkeypatch.setenv("SDWB_FAKE_SD", "1")
+    monkeypatch.setenv("MIRAGE_FAKE_SD", "1")
     application = Application(paths)
     yield application
     application.close()

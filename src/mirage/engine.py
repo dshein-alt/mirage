@@ -23,8 +23,8 @@ class UnixHTTPConnection(http.client.HTTPConnection):
 
 class EngineClient:
     def __init__(self, socket_path=None, engine=None, api_prefix="/v1.41"):
-        self.socket_path = socket_path or os.environ.get("SDWB_ENGINE_SOCKET", "/run/engine.sock")
-        self.engine = engine or os.environ.get("SDWB_CONTAINER_ENGINE", "podman")
+        self.socket_path = socket_path or os.environ.get("MIRAGE_ENGINE_SOCKET", "/run/engine.sock")
+        self.engine = engine or os.environ.get("MIRAGE_CONTAINER_ENGINE", "podman")
         self.api_prefix = api_prefix
 
     def request(self, method, path, body=None, headers=None, timeout=60, stream=False):
@@ -70,6 +70,17 @@ class EngineClient:
                 return False
             raise
 
+    def require_runtime_image(self, image):
+        if not self.image_exists(image):
+            raise WorkbenchError(
+                "runtime_image_missing",
+                f"The immutable runtime image required by this operation is unavailable: {image}",
+                500,
+            )
+
+    def inspect_image(self, image):
+        return self.request("GET", f"/images/{quote(image, safe='')}/json")
+
     def ensure_runtime_image(self, image, dockerfile):
         if self.image_exists(image):
             return
@@ -99,14 +110,15 @@ class EngineClient:
             ],
         }
         if self.engine == "podman":
-            host_config["GroupAdd"] = [value for value in os.environ.get("SDWB_HOST_GROUPS", "").split(",") if value]
+            host_config["GroupAdd"] = [value for value in os.environ.get("MIRAGE_HOST_GROUPS", "").split(",") if value]
+            host_config["UsernsMode"] = "keep-id"
         body = {
             "Image": image,
             "Entrypoint": ["/usr/local/bin/sd-cli"],
             "Cmd": command,
             "Env": [f"{key}={value}" for key, value in (environment or {}).items()],
             "WorkingDir": workdir,
-            "User": f"{os.environ.get('SDWB_HOST_UID', '')}:{os.environ.get('SDWB_HOST_GID', '')}" if self.engine == "docker" and os.environ.get("SDWB_HOST_UID") else "",
+            "User": f"{os.environ.get('MIRAGE_HOST_UID', '')}:{os.environ.get('MIRAGE_HOST_GID', '')}" if os.environ.get("MIRAGE_HOST_UID") else "",
             "Tty": True,
             "OpenStdin": False,
             "HostConfig": host_config,

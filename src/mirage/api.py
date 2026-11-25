@@ -23,17 +23,28 @@ auth_service = AuthService()
 
 @asynccontextmanager
 async def lifespan(app):
-    application.queue.start()
+    if os.environ.get("MIRAGE_VERIFY_ONLY") != "1":
+        application.queue.start()
     yield
     application.queue.stop()
 
 
-app = FastAPI(title="SD Workbench", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Mirage", version="1.0.0", lifespan=lifespan)
 
 
 def error_response(code, message, status):
     response = JSONResponse({"error": {"code": code, "message": message}}, status_code=status)
     return response
+
+
+async def call_with_admission(request, call_next):
+    if request.url.path.startswith("/api/") and request.method in {"POST", "PUT", "PATCH", "DELETE"} and "/auth/" not in request.url.path:
+        try:
+            with application.database.write_admission():
+                return await call_next(request)
+        except WorkbenchError as error:
+            return error_response(error.code, error.message, error.status)
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -52,10 +63,10 @@ async def security_and_errors(request: Request, call_next):
             response = error_response("forbidden", "Administrator role required", 403)
         else:
             request.state.auth = context
-            response = await call_next(request)
+            response = await call_with_admission(request, call_next)
     else:
         request.state.auth = context
-        response = await call_next(request)
+        response = await call_with_admission(request, call_next)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
@@ -109,7 +120,13 @@ def logout(request: Request):
 @app.get("/api/v1/health")
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "version": "1.0.0"}
+    return {
+        "status": "ok",
+        "version": "1.0.0",
+        "deployment_id": os.environ.get("MIRAGE_DEPLOYMENT_ID"),
+        "container_image": os.environ.get("MIRAGE_CONTAINER_IMAGE_ID"),
+        "maintenance": application.database.maintenance_status(),
+    }
 
 
 @app.get("/api/v1/system")
@@ -200,6 +217,13 @@ async def upload(request: Request, filename: str = "upload"):
     return application.media.upload(content, filename)
 
 
+@app.delete("/api/v1/inputs/{input_id}")
+@app.delete("/api/inputs/{input_id}")
+def delete_input(input_id):
+    application.media.delete_input(input_id)
+    return {"deleted": True}
+
+
 @app.post("/api/v1/jobs", status_code=202)
 @app.post("/api/jobs", status_code=202)
 def submit_job(request: dict):
@@ -260,8 +284,14 @@ async def events(request: Request, after: int = 0):
 
 @app.get("/api/v1/images")
 @app.get("/api/images")
-def images(search: str | None = None, model: str | None = None, resolution: str | None = None, quality: str | None = None, limit: int = 200):
-    return application.database.list_images(search, model, resolution, quality, min(max(limit, 1), 500))
+def images(search: str | None = None, model: str | None = None, resolution: str | None = None, quality: str | None = None, width: int | None = None, height: int | None = None, limit: int = 200):
+    return application.database.list_images(search, model, resolution, quality, width, height, min(max(limit, 1), 500))
+
+
+@app.get("/api/v1/image-dimensions")
+@app.get("/api/image-dimensions")
+def image_dimensions():
+    return application.database.image_dimensions()
 
 
 @app.get("/api/v1/images/{image_id}")
@@ -329,8 +359,8 @@ app.mount("/", StaticFiles(directory=application.paths.web, html=True), name="we
 
 def main():
     settings = application.settings["server"]
-    if settings["host"] not in ("127.0.0.1", "localhost", "::1") and not os.environ.get("SDWB_API_TOKEN"):
-        raise SystemExit("SDWB_API_TOKEN is required when binding beyond loopback")
+    if settings["host"] not in ("127.0.0.1", "localhost", "::1") and not os.environ.get("MIRAGE_API_TOKEN"):
+        raise SystemExit("MIRAGE_API_TOKEN is required when binding beyond loopback")
     uvicorn.run(app, host=settings["host"], port=settings["port"], log_level="info", access_log=False)
 
 

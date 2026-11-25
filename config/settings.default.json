@@ -3,10 +3,10 @@
   "server": {"host": "127.0.0.1", "port": 8765},
   "queue": {"concurrency": 1},
   "runtime": {
-    "image": "localhost/sd-workbench-runtime:1",
-    "app_image": "localhost/sd-workbench-app:1",
-    "container_prefix": "sd-workbench",
-    "minimum_sd_revision": "532d2c15c430a785a712b2d94281f04e733008a4"
+    "image": "localhost/mirage-runtime:1",
+    "app_image": "localhost/mirage-app:1",
+    "container_prefix": "mirage",
+    "minimum_sd_revision": "79dc7ca9074d79419a46380cdb95a4524db9b74c"
   },
   "backend_profiles": {
     "vulkan-balanced": {

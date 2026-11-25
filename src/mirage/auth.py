@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from .errors import WorkbenchError
 
-SESSION_COOKIE = "sdwb_session"
+SESSION_COOKIE = "mirage_session"
 SESSION_SECONDS = 7 * 24 * 60 * 60
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 MUTATIONS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -40,7 +40,7 @@ class AuthService:
     def authenticate(self, request):
         authorization = request.headers.get("Authorization", "")
         if authorization.startswith("Bearer "):
-            if self._matches(authorization.removeprefix("Bearer "), os.environ.get("SDWB_API_TOKEN")):
+            if self._matches(authorization.removeprefix("Bearer "), os.environ.get("MIRAGE_API_TOKEN")):
                 return AuthContext("admin", "bearer")
             return None
         session_id = request.cookies.get(SESSION_COOKIE)
@@ -57,9 +57,9 @@ class AuthService:
             return AuthContext(session["role"], "cookie", session["csrf"])
 
     def login(self, token):
-        if self._matches(token, os.environ.get("SDWB_API_TOKEN")):
+        if self._matches(token, os.environ.get("MIRAGE_API_TOKEN")):
             role = "admin"
-        elif self._matches(token, os.environ.get("SDWB_BROWSER_TOKEN")):
+        elif self._matches(token, os.environ.get("MIRAGE_BROWSER_TOKEN")):
             role = "user"
         else:
             raise WorkbenchError("unauthorized", "Invalid access token", 401)

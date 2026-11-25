@@ -6,10 +6,10 @@ COPY --from=uv /uv /uvx /bin/
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy UV_PROJECT_ENVIRONMENT=/app/.venv \
     PATH="/app/.venv/bin:$PATH" \
-    SDWB_DATA_DIR=/data SDWB_CONFIG_DIR=/app/config SDWB_WEB_DIR=/app/web
+    MIRAGE_DATA_DIR=/data MIRAGE_CONFIG_DIR=/app/config MIRAGE_WEB_DIR=/app/web
 WORKDIR /app
 
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock LICENSE ./
 COPY src/ ./src/
 RUN uv sync --locked --no-dev --no-editable --compile-bytecode
 
@@ -20,13 +20,13 @@ COPY docker/ ./docker/
 RUN mkdir -p /data && chown -R 1000:1000 /data /app
 USER 1000:1000
 EXPOSE 8765
-CMD ["python", "-m", "sd_workbench.api"]
+CMD ["python", "-m", "mirage.api"]
 
 FROM production AS development
 USER root
 RUN uv sync --locked --dev --no-editable
 COPY tests/ ./tests/
-COPY install.sh ./install.sh
+COPY install.sh install.py ./
 COPY bin/ ./bin/
 COPY scripts/ ./scripts/
 USER 1000:1000

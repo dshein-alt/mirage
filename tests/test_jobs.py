@@ -7,13 +7,13 @@ from PIL import Image
 import pytest
 
 from conftest import install_sparse, wait_for_job
-from sd_workbench.errors import WorkbenchError
+from mirage.errors import WorkbenchError
 
 
 def test_fake_generation_publishes_gallery_and_sidecar(app, registry):
     install_sparse(registry, "zimage")
     app.queue.start()
-    job = app.submit_generation({"prompt": "A red fox", "model": "zimage", "resolution": "small", "quality": "fast"})
+    job = app.submit_generation({"prompt": "A red fox", "model": "zimage", "resolution": "sd", "quality": "fast"})
     finished = wait_for_job(app, job["id"])
     assert finished["status"] == "completed", finished["error"]
     image = app.database.get_image(finished["output_id"])
@@ -120,14 +120,14 @@ def test_cancellation_does_not_publish_image(app, registry):
 @pytest.mark.parametrize("cancelled,expected_code", [(True, "job_cancelled"), (False, "engine_error")])
 def test_container_wait_after_removal_respects_cancellation(app, registry, monkeypatch, cancelled, expected_code):
     install_sparse(registry, "zimage")
-    monkeypatch.setenv("SDWB_ALLOW_NO_GPU", "1")
+    monkeypatch.setenv("MIRAGE_ALLOW_NO_GPU", "1")
     job = app.submit_generation({"prompt": "Cancel running container", "model": "zimage"})
-    release_bin = app.paths.data / "runtimes" / "releases" / job["resolved"]["runtime_revision"] / "bin"
+    release_bin = app.paths.data / "runtimes" / "releases" / job["resolved"]["runtime_build"] / "bin"
     release_bin.mkdir(parents=True)
     (release_bin / "sd-cli").touch()
 
     class RemovedContainerEngine:
-        def ensure_runtime_image(self, image, dockerfile):
+        def require_runtime_image(self, image):
             pass
 
         def create(self, *args):

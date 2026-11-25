@@ -5,9 +5,9 @@ import threading
 
 import pytest
 
-from sd_workbench.downloader import DownloadManager
-from sd_workbench.errors import WorkbenchError
-from sd_workbench.manifest import ModelRegistry
+from mirage.downloader import DownloadManager
+from mirage.errors import WorkbenchError
+from mirage.manifest import ModelRegistry
 
 
 class RangeHandler(BaseHTTPRequestHandler):
