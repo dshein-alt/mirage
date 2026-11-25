@@ -24,6 +24,7 @@ class Application:
         self.registry = ModelRegistry(self.paths.model_manifest, self.paths.data / "models")
         self.config = ConfigService(self.paths, self.registry)
         self.settings = self.config.settings()
+        self.settings["server"] = self.config.resolve_server(self.settings["server"])
         self.database = Database(self.paths.database)
         if os.environ.get("MIRAGE_MAINTENANCE") == "1":
             self.database.ensure_maintenance(os.environ.get("MIRAGE_DEPLOYMENT_ID", "installer"))
@@ -119,6 +120,8 @@ class Application:
         return self.registry.status(model_id)
 
     def update_settings(self, document):
+        if isinstance(document, dict) and document.get("server") != self.settings["server"]:
+            raise WorkbenchError("server_managed_by_installer", "Use the installer to change the access mode or port")
         updated = self.config.update_settings(document)
         self.settings = updated
         self.runner.settings = updated

@@ -1,6 +1,7 @@
 from copy import deepcopy
 from datetime import datetime, timezone
 import math
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -68,7 +69,6 @@ class ConfigService:
         backup = self.paths.generation_config.with_name(f"generation-presets.pre-mirage-{timestamp}.json")
         shutil.copy2(self.paths.generation_config, backup)
         with backup.open("rb") as stream:
-            import os
             os.fsync(stream.fileno())
         defaults = deepcopy(legacy["defaults"])
         original = defaults.get("resolution")
@@ -95,6 +95,26 @@ class ConfigService:
             original_size = legacy.get("resolutions", {}).get(original, {})
             if (original_size.get("width"), original_size.get("height")) != (1024, 1024):
                 self.migration_warning("the previous default size is unsupported; HD 1024×1024 is now the default")
+
+    @staticmethod
+    def validate_server(server):
+        if not isinstance(server, dict) or server.get("mode") not in ("local", "authenticated"):
+            raise ValueError("server.mode must be local or authenticated")
+        port = server.get("port")
+        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+            raise ValueError("server.port must be an integer from 1 to 65535")
+
+    @staticmethod
+    def resolve_server(server):
+        candidate = dict(server)
+        candidate["mode"] = os.environ.get("MIRAGE_MODE", candidate.get("mode"))
+        if os.environ.get("MIRAGE_PORT"):
+            try:
+                candidate["port"] = int(os.environ["MIRAGE_PORT"])
+            except ValueError as error:
+                raise ValueError("MIRAGE_PORT must be an integer from 1 to 65535") from error
+        ConfigService.validate_server(candidate)
+        return candidate
 
     @staticmethod
     def validate(document, registry):
@@ -215,8 +235,7 @@ class ConfigService:
         try:
             if document["schema_version"] != 1 or document["queue"]["concurrency"] != 1:
                 raise ValueError("schema_version must be 1 and queue.concurrency must remain 1")
-            if not isinstance(document["server"]["host"], str) or not isinstance(document["server"]["port"], int):
-                raise ValueError("server host and port are invalid")
+            self.validate_server(document["server"])
             if set(document["models"]) != set(self.registry.models):
                 raise ValueError("settings models must match the model registry")
             profiles = document["backend_profiles"]

@@ -1,5 +1,6 @@
 import hashlib
 import os
+import re
 import secrets
 import threading
 import time
@@ -9,8 +10,19 @@ from .errors import WorkbenchError
 
 SESSION_COOKIE = "mirage_session"
 SESSION_SECONDS = 7 * 24 * 60 * 60
-LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 MUTATIONS = {"POST", "PUT", "PATCH", "DELETE"}
+TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{16,64}\Z")
+
+
+def validate_access_tokens(mode):
+    if mode == "local":
+        return
+    tokens = {name: os.environ.get(name, "") for name in ("MIRAGE_API_TOKEN", "MIRAGE_BROWSER_TOKEN")}
+    for name, value in tokens.items():
+        if not TOKEN_PATTERN.fullmatch(value):
+            raise ValueError(f"{name} must be a URL-safe 16-64 character string in authenticated mode")
+    if tokens["MIRAGE_API_TOKEN"] == tokens["MIRAGE_BROWSER_TOKEN"]:
+        raise ValueError("MIRAGE_API_TOKEN and MIRAGE_BROWSER_TOKEN must be different")
 
 
 @dataclass(frozen=True)
@@ -21,13 +33,14 @@ class AuthContext:
 
 
 class AuthService:
-    def __init__(self):
+    def __init__(self, mode="local"):
+        self.mode = mode
+        validate_access_tokens(mode)
         self.sessions = {}
         self.lock = threading.RLock()
 
-    @staticmethod
-    def enabled(host):
-        return host not in LOCAL_HOSTS
+    def enabled(self):
+        return self.mode != "local"
 
     @staticmethod
     def _digest(value):

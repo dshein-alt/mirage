@@ -75,3 +75,39 @@ def test_output_names_never_overwrite(paths):
     assert second.name.endswith("-0002.png")
     third = reserve_output(paths.outputs, "z-image-turbo", "large", "high")
     assert third.name.endswith("-0003.png")
+
+
+def test_server_access_defaults(paths, registry):
+    settings = ConfigService(paths, registry).settings()
+    assert settings["server"] == {"mode": "local", "port": 8765}
+
+
+@pytest.mark.parametrize("server", [
+    {"mode": "lan", "port": 8765},
+    {"mode": "local", "port": 0},
+    {"mode": "local", "port": 65536},
+    {"mode": "local", "port": True},
+])
+def test_invalid_server_access_settings(paths, registry, server):
+    service = ConfigService(paths, registry)
+    document = service.settings()
+    document["server"] = server
+    with pytest.raises(ValueError, match="server"):
+        service.update_settings(document)
+
+
+def test_server_access_changes_require_installer(app):
+    document = deepcopy(app.settings)
+    document["server"] = {"mode": "authenticated", "port": 9000}
+    with pytest.raises(WorkbenchError, match="installer"):
+        app.update_settings(document)
+
+
+def test_access_environment_controls_listener_and_mode(monkeypatch):
+    monkeypatch.setenv("MIRAGE_MODE", "authenticated")
+    monkeypatch.setenv("MIRAGE_PORT", "9000")
+    server = ConfigService.resolve_server({"mode": "local", "port": 8765})
+    assert server == {"mode": "authenticated", "port": 9000}
+    monkeypatch.setenv("MIRAGE_PORT", "invalid")
+    with pytest.raises(ValueError, match="MIRAGE_PORT"):
+        ConfigService.resolve_server(server)

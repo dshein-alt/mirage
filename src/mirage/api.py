@@ -11,14 +11,14 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
-from .auth import AuthContext, AuthService, SESSION_COOKIE, SESSION_SECONDS
+from .auth import AuthContext, AuthService, SESSION_COOKIE, SESSION_SECONDS, validate_access_tokens
 from .config import ConfigService
 from .errors import WorkbenchError
 from .security import bounded_upload
 from .service import Application
 
 application = Application(start_queue=False)
-auth_service = AuthService()
+auth_service = AuthService(application.settings["server"]["mode"])
 
 
 @asynccontextmanager
@@ -49,7 +49,7 @@ async def call_with_admission(request, call_next):
 
 @app.middleware("http")
 async def security_and_errors(request: Request, call_next):
-    auth_required = auth_service.enabled(application.settings["server"]["host"])
+    auth_required = auth_service.enabled()
     is_api = request.url.path.startswith("/api/")
     is_login = request.url.path in ("/api/v1/auth/login", "/api/auth/login")
     context = AuthContext("admin", "local")
@@ -102,7 +102,7 @@ def auth_session(request: Request):
     context = request.state.auth
     return {
         "authenticated": True,
-        "auth_required": auth_service.enabled(application.settings["server"]["host"]),
+        "auth_required": auth_service.enabled(),
         "role": context.role,
         "csrf": context.csrf,
     }
@@ -359,9 +359,13 @@ app.mount("/", StaticFiles(directory=application.paths.web, html=True), name="we
 
 def main():
     settings = application.settings["server"]
-    if settings["host"] not in ("127.0.0.1", "localhost", "::1") and not os.environ.get("MIRAGE_API_TOKEN"):
-        raise SystemExit("MIRAGE_API_TOKEN is required when binding beyond loopback")
-    uvicorn.run(app, host=settings["host"], port=settings["port"], log_level="info", access_log=False)
+    try:
+        validate_access_tokens(settings["mode"])
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    default_host = "127.0.0.1" if settings["mode"] == "local" else "0.0.0.0"
+    host = os.environ.get("MIRAGE_BIND_HOST", default_host)
+    uvicorn.run(app, host=host, port=settings["port"], log_level="info", access_log=False)
 
 
 if __name__ == "__main__":

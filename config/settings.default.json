@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "server": {"host": "127.0.0.1", "port": 8765},
+  "server": {"mode": "local", "port": 8765},
   "queue": {"concurrency": 1},
   "runtime": {
     "image": "localhost/mirage-runtime:1",
