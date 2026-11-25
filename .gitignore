@@ -1,0 +1,15 @@
+data/
+!data/.gitkeep
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+.coverage
+build/
+dist/
+*.partial
+*.log
+.codex
+.agents
+.aws

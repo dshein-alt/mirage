@@ -1,0 +1,14 @@
+FROM ubuntu:24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 libvulkan1 mesa-vulkan-drivers libglvnd0 libgl1 libglx0 \
+    libegl1 libgles2 vulkan-tools ca-certificates && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN printf '#!/bin/sh\nexport LD_LIBRARY_PATH=/opt/sd/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\nexec /opt/sd/bin/sd-cli "$@"\n' > /usr/local/bin/sd-cli && \
+    printf '#!/bin/sh\nexport LD_LIBRARY_PATH=/opt/sd/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\nexec /opt/sd/bin/sd-server "$@"\n' > /usr/local/bin/sd-server && \
+    chmod 0755 /usr/local/bin/sd-cli /usr/local/bin/sd-server
+
+WORKDIR /output
+ENTRYPOINT ["/usr/local/bin/sd-cli"]

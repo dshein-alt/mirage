@@ -1,0 +1,142 @@
+#!/bin/bash
+set -euo pipefail
+
+SOURCE=$(readlink -f "${BASH_SOURCE[0]}")
+ROOT=$(CDPATH= cd -- "$(dirname -- "$SOURCE")/.." && pwd)
+DATA=${SDWB_DATA_DIR:-$ROOT/data}
+. "$ROOT/scripts/common.sh"
+ENGINE=$(sdwb_engine)
+SOCKET=$(sdwb_socket "$ENGINE")
+IMAGE=localhost/sd-workbench-app:1
+NAME=sd-workbench
+export SDWB_CONTAINER_ENGINE="$ENGINE"
+USERNS=()
+if [[ "$ENGINE" == podman ]]; then
+    USERNS=(--userns=keep-id)
+fi
+
+service_running() {
+    "$ENGINE" inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null | grep -qx true
+}
+
+service_exists() {
+    "$ENGINE" container inspect "$NAME" >/dev/null 2>&1
+}
+
+service_args() {
+    local dri=() device devices
+    for device in /dev/dri/card* /dev/dri/renderD*; do
+        [[ -e "$device" ]] && dri+=("$device")
+    done
+    devices=$(IFS=,; echo "${dri[*]}")
+    local args=(--name "$NAME" --network host --read-only --tmpfs /tmp
+        --user "$(id -u):$(id -g)" "${USERNS[@]}"
+        -v "$DATA:/data:rw" -v "$SOCKET:/run/engine.sock:rw"
+        -e SDWB_DATA_DIR=/data -e "SDWB_HOST_DATA_DIR=$DATA"
+        -e SDWB_ENGINE_SOCKET=/run/engine.sock -e "SDWB_CONTAINER_ENGINE=$ENGINE"
+        -e "SDWB_HOST_UID=$(id -u)" -e "SDWB_HOST_GID=$(id -g)"
+        -e "SDWB_HOST_GROUPS=$(id -G | tr ' ' ',')"
+        -e "HF_TOKEN=${HF_TOKEN:-}" -e "SDWB_API_TOKEN=${SDWB_API_TOKEN:-}"
+        -e "SDWB_BROWSER_TOKEN=${SDWB_BROWSER_TOKEN:-}"
+        -e "SDWB_FAKE_SD=${SDWB_FAKE_SD:-0}" -e "SDWB_ALLOW_NO_GPU=${SDWB_ALLOW_NO_GPU:-0}"
+        -e "SDWB_DRI_DEVICES=$devices")
+    if [[ "$ENGINE" == docker ]]; then
+        args+=(--group-add "$(stat -c %g "$SOCKET")")
+    fi
+    printf '%s\n' "${args[@]}"
+}
+
+start_service() {
+    if service_running; then
+        return
+    fi
+    if service_exists; then
+        "$ENGINE" rm "$NAME" >/dev/null
+    fi
+    local args
+    mapfile -t args < <(service_args)
+    "$ENGINE" run -d "${args[@]}" "$IMAGE" >/dev/null
+    local attempt
+    for attempt in {1..30}; do
+        if "$ENGINE" exec --user "$(id -u):$(id -g)" "$NAME" python -c 'import os; from urllib.request import Request, urlopen; urlopen(Request("http://127.0.0.1:8765/api/v1/health", headers={"Authorization": "Bearer " + os.environ.get("SDWB_API_TOKEN", "")}), timeout=1)' >/dev/null 2>&1; then
+            return
+        fi
+        sleep 1
+    done
+    echo "sdwb: service did not become healthy; inspect: $ENGINE logs $NAME" >&2
+    return 1
+}
+
+case "${1:-}" in
+    serve)
+        if service_running; then
+            echo "SD Workbench: http://127.0.0.1:8765"
+            exec "$ENGINE" logs -f "$NAME"
+        fi
+        if service_exists; then
+            "$ENGINE" rm "$NAME" >/dev/null
+        fi
+        mapfile -t args < <(service_args)
+        exec "$ENGINE" run --rm "${args[@]}" "$IMAGE"
+        ;;
+    start)
+        start_service
+        echo "SD Workbench: http://127.0.0.1:8765"
+        exit
+        ;;
+    stop)
+        "$ENGINE" stop "$NAME" >/dev/null
+        exit
+        ;;
+    restart)
+        "$ENGINE" rm -f "$NAME" >/dev/null 2>&1 || true
+        start_service
+        exit
+        ;;
+    logs)
+        exec "$ENGINE" logs -f "$NAME"
+        ;;
+    runtime)
+        if [[ "${2:-}" == build ]]; then
+            shift 2
+            exec "$ROOT/scripts/runtime-build.sh" "${1:-532d2c15c430a785a712b2d94281f04e733008a4}"
+        elif [[ "${2:-}" == repair ]]; then
+            exec "$ROOT/scripts/runtime-build.sh" "${3:-532d2c15c430a785a712b2d94281f04e733008a4}"
+        fi
+        ;;
+    backup)
+        exec "$ROOT/scripts/backup.sh"
+        ;;
+esac
+
+start_service
+command=("$ENGINE" run --rm --network host --user "$(id -u):$(id -g)" "${USERNS[@]}"
+    -v "$PWD:/work:rw" -w /work -e "SDWB_API_URL=http://127.0.0.1:8765"
+    -e "SDWB_API_TOKEN=${SDWB_API_TOKEN:-}" "$IMAGE" python -m sd_workbench.cli "$@")
+
+if [[ "${1:-}" == generate ]]; then
+    args=("$@")
+    command=("$ENGINE" run --rm --network host --user "$(id -u):$(id -g)" "${USERNS[@]}"
+        -v "$PWD:/work:rw" -w /work -e "SDWB_API_URL=http://127.0.0.1:8765"
+        -e "SDWB_API_TOKEN=${SDWB_API_TOKEN:-}" "$IMAGE")
+    index=0
+    expect_ref=0
+    rewritten=()
+    for arg in "${args[@]}"; do
+        if (( expect_ref )); then
+            ref=$(realpath "$arg")
+            [[ -f "$ref" ]] || { echo "sdwb: reference not found: $ref" >&2; exit 2; }
+            index=$((index + 1))
+            mount="/sdwb-reference-$index"
+            command+=(-v "$(dirname "$ref"):$mount:ro")
+            rewritten+=("$mount/$(basename "$ref")")
+            expect_ref=0
+        else
+            rewritten+=("$arg")
+            [[ "$arg" == --ref ]] && expect_ref=1
+        fi
+    done
+    command+=(python -m sd_workbench.cli "${rewritten[@]}")
+fi
+
+exec "${command[@]}"

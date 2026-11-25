@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>SD Workbench</title>
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <script src="/js/theme-init.js"></script>
+  <link rel="stylesheet" href="/css/tokens.css">
+  <link rel="stylesheet" href="/css/layout.css">
+  <link rel="stylesheet" href="/css/components.css">
+  <link rel="stylesheet" href="/css/gallery.css">
+</head>
+<body>
+  <svg class="svg-defs" aria-hidden="true"><use href="/icons/icons.svg#spark"></use></svg>
+  <header class="topbar">
+    <a class="brand" href="#generate" aria-label="SD Workbench"><span class="brand-mark">S</span><span>SD Workbench</span></a>
+    <div class="top-actions">
+      <span id="service-status" class="status-pill" data-i18n="connecting">Connecting</span>
+      <button id="logout" class="secondary hidden" type="button" data-i18n="logout">Log out</button>
+      <button id="theme-quick" class="icon-button" type="button" data-i18n-title="theme" title="Theme">◐</button>
+      <select id="language-quick" class="compact-select" data-i18n-aria="language" aria-label="Language">
+        <option value="auto" data-i18n="languageAuto">Automatic</option><option value="en">EN</option><option value="ru">RU</option>
+      </select>
+    </div>
+  </header>
+  <div class="shell">
+    <nav class="sidebar" aria-label="Main" data-i18n-aria="mainNavigation">
+      <button class="nav-item active" data-page="generate" type="button"><span class="nav-icon">✦</span><span data-i18n="generate">Generate</span></button>
+      <button class="nav-item" data-page="gallery" type="button"><span class="nav-icon">▦</span><span data-i18n="gallery">Gallery</span></button>
+      <button class="nav-item" data-page="jobs" type="button"><span class="nav-icon">◷</span><span data-i18n="jobs">Jobs</span><span id="jobs-badge" class="badge hidden"></span></button>
+      <button class="nav-item" data-page="models" type="button"><span class="nav-icon">◇</span><span data-i18n="models">Models</span></button>
+      <button class="nav-item" data-page="settings" type="button"><span class="nav-icon">⚙</span><span data-i18n="settings">Settings</span></button>
+      <div class="sidebar-foot"><span class="dot"></span><span data-i18n="localOnly">Local only</span></div>
+    </nav>
+    <main id="main">
+      <section id="page-generate" class="page active" data-title="generateTitle">
+        <div class="page-heading"><div><p class="eyebrow" data-i18n="workspace">Workspace</p><h1 data-i18n="generateTitle">Create an image</h1><p data-i18n="generateSubtitle">Describe your idea. The queue keeps working if you leave.</p></div></div>
+        <div class="generate-layout">
+          <form id="generate-form" class="panel form-panel">
+            <label for="prompt" data-i18n="prompt">Prompt</label>
+            <textarea id="prompt" rows="6" required maxlength="16000" data-i18n-placeholder="promptPlaceholder" placeholder="A red fox reading beneath an oak tree…"></textarea>
+            <div class="form-grid three">
+              <div><label for="model" data-i18n="model">Model</label><select id="model" required></select></div>
+              <div><label for="resolution" data-i18n="resolution">Resolution</label><select id="resolution" required></select></div>
+              <div><label for="quality" data-i18n="quality">Quality</label><select id="quality" required></select></div>
+            </div>
+            <div id="reference-section" class="reference-box hidden">
+              <label for="references" data-i18n="referenceImages">Reference images</label>
+              <input id="references" type="file" accept="image/png,image/jpeg,image/webp,image/bmp" multiple>
+              <p class="hint" data-i18n="referenceHint">Qwen editing supports up to 8 images.</p>
+              <div id="reference-preview" class="reference-preview"></div>
+            </div>
+            <details class="advanced"><summary data-i18n="advanced">Advanced parameters</summary><div class="form-grid three">
+              <div><label for="steps" data-i18n="steps">Steps</label><input id="steps" type="number" min="1" max="250" data-i18n-placeholder="presetDefault" placeholder="Preset"></div>
+              <div><label for="cfg" data-i18n="cfgScale">CFG scale</label><input id="cfg" type="number" min="0" max="30" step="0.1" data-i18n-placeholder="presetDefault" placeholder="Preset"></div>
+              <div><label for="seed" data-i18n="seed">Seed</label><input id="seed" type="number" min="-1" max="2147483647" data-i18n-placeholder="random" placeholder="Random"></div>
+            </div></details>
+            <div id="generate-error" class="error-message hidden" role="alert"></div>
+            <button id="generate-submit" class="primary large" type="submit"><span data-i18n="queueGeneration">Queue generation</span><span>→</span></button>
+          </form>
+          <aside class="panel result-panel"><div class="result-empty" id="result-empty"><span class="result-symbol">✦</span><h2 data-i18n="resultAppears">Your result will appear here</h2><p data-i18n="jobsPersistent">You can safely close this tab after submitting.</p></div><div id="result-content" class="hidden"><img id="result-image" alt="Generated image" data-i18n-aria="generatedImage"><div class="result-meta"><span id="result-name"></span><a id="result-download" class="secondary" download data-i18n="download">Download</a></div></div></aside>
+        </div>
+      </section>
+      <section id="page-gallery" class="page" data-title="galleryTitle">
+        <div class="page-heading"><div><p class="eyebrow" data-i18n="library">Library</p><h1 data-i18n="galleryTitle">Your gallery</h1><p data-i18n="gallerySubtitle">Search, inspect, download, or reuse generated images.</p></div></div>
+        <div class="filterbar panel"><input id="gallery-search" type="search" data-i18n-placeholder="searchPrompts" placeholder="Search prompts"><select id="gallery-model"><option value="" data-i18n="allModels">All models</option></select><select id="gallery-resolution"><option value="" data-i18n="allSizes">All sizes</option></select><select id="gallery-quality"><option value="" data-i18n="allQualities">All qualities</option></select><button id="gallery-refresh" class="secondary" data-i18n="refresh">Refresh</button></div>
+        <div id="gallery-grid" class="gallery-grid"></div><div id="gallery-empty" class="empty-state hidden"><span>▦</span><h2 data-i18n="noImages">No images yet</h2><p data-i18n="noImagesHint">Finished generations will be collected here.</p></div>
+      </section>
+      <section id="page-jobs" class="page" data-title="jobsTitle">
+        <div class="page-heading"><div><p class="eyebrow" data-i18n="activity">Activity</p><h1 data-i18n="jobsTitle">Job queue</h1><p data-i18n="jobsSubtitle">One GPU job at a time. Everything is saved locally.</p></div><button id="jobs-refresh" class="secondary" data-i18n="refresh">Refresh</button></div>
+        <div id="jobs-list" class="jobs-list"></div><div id="jobs-empty" class="empty-state hidden"><span>◷</span><h2 data-i18n="noJobs">No jobs</h2></div>
+      </section>
+      <section id="page-models" class="page" data-title="modelsTitle">
+        <div class="page-heading"><div><p class="eyebrow" data-i18n="registry">Registry</p><h1 data-i18n="modelsTitle">Model catalog</h1><p data-i18n="modelsSubtitle">Install, verify, and inspect compatible components.</p></div><button id="models-refresh" class="secondary" data-i18n="refresh">Refresh</button></div>
+        <div id="models-list" class="models-list"></div>
+      </section>
+      <section id="page-settings" class="page" data-title="settingsTitle">
+        <div class="page-heading"><div><p class="eyebrow" data-i18n="preferences">Preferences</p><h1 data-i18n="settingsTitle">Settings</h1><p data-i18n="settingsSubtitle">Appearance stays in this browser; generation presets are shared.</p></div></div>
+        <div class="settings-grid">
+          <section class="panel settings-card"><h2 data-i18n="appearance">Appearance</h2><label for="theme-setting" data-i18n="theme">Theme</label><select id="theme-setting"><option value="system" data-i18n="themeSystem">System</option><option value="light" data-i18n="themeLight">Light</option><option value="dark" data-i18n="themeDark">Dark</option></select><label for="language-setting" data-i18n="language">Language</label><select id="language-setting"><option value="auto" data-i18n="languageAuto">Automatic</option><option value="en">English</option><option value="ru">Русский</option></select></section>
+          <section class="panel settings-card"><h2 data-i18n="runtime">Runtime</h2><dl id="runtime-details" class="details-list"></dl><div class="button-row"><button id="runtime-verify" class="secondary" data-admin data-i18n="verifyRuntime">Verify runtime</button></div></section>
+          <section class="panel config-card" data-admin><div class="section-title"><div><h2 data-i18n="backendSettings">Backend and service settings</h2><p class="hint" data-i18n="backendHint">Named CPU/Vulkan profiles and service limits. Arbitrary command-line flags are rejected.</p></div></div><textarea id="settings-editor" spellcheck="false" rows="18"></textarea><div id="settings-error" class="error-message hidden" role="alert"></div><div class="button-row"><button id="settings-save" class="primary" data-i18n="save">Save</button></div></section>
+          <section class="panel config-card" data-admin><div class="section-title"><div><h2 data-i18n="generationPresets">Generation presets</h2><p class="hint" data-i18n="configHint">Edit JSON, save, then reload external edits. Queued jobs keep their snapshots.</p></div><span id="config-revision" class="mono"></span></div><textarea id="config-editor" spellcheck="false" rows="24"></textarea><div id="config-error" class="error-message hidden" role="alert"></div><div class="button-row"><button id="config-save" class="primary" data-i18n="save">Save</button><button id="config-reload" class="secondary" data-i18n="reload">Reload</button><button id="config-restore" class="danger-secondary" data-i18n="restoreDefaults">Restore defaults</button></div></section>
+        </div>
+      </section>
+    </main>
+  </div>
+  <dialog id="auth-dialog" class="auth-dialog"><form id="auth-form" method="dialog"><h2 data-i18n="loginTitle">Sign in to SD Workbench</h2><p data-i18n="loginHint">Enter the access token configured on this server.</p><label for="auth-token" data-i18n="accessToken">Access token</label><input id="auth-token" type="password" required autocomplete="current-password"><div id="auth-error" class="error-message hidden" role="alert"></div><button class="primary large" type="submit" data-i18n="login">Sign in</button></form></dialog>
+  <div id="toast" class="toast hidden" role="status"></div>
+  <dialog id="image-dialog"><button id="dialog-close" class="dialog-close" data-i18n-aria="close" aria-label="Close">×</button><img id="dialog-image" alt=""><div class="dialog-info"><h2 id="dialog-title"></h2><p id="dialog-prompt"></p><pre id="dialog-metadata"></pre><div class="button-row"><a id="dialog-download" class="primary" download data-i18n="download">Download</a><button id="dialog-reuse" class="secondary" data-i18n="reuseSettings">Reuse settings</button><button id="dialog-reference" class="secondary" data-i18n="useAsReference">Use as reference</button><button id="dialog-delete" class="danger-secondary" data-i18n="moveToTrash">Move to trash</button></div></div></dialog>
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "defaults": {"model": "zimage", "resolution": "large", "quality": "high"},
+  "resolutions": {
+    "small": {"width": 256, "height": 256},
+    "medium": {"width": 512, "height": 512},
+    "large": {"width": 768, "height": 768},
+    "hd": {"width": 1024, "height": 1024}
+  },
+  "models": {
+    "moss": {
+      "default_quality": "medium", "cfg_scale": 3.0,
+      "sampler": "euler", "scheduler": "simple",
+      "quality": {"fast": {"steps": 20}, "medium": {"steps": 35}, "high": {"steps": 50}}
+    },
+    "qwen": {
+      "default_quality": "medium", "cfg_scale": 6.0,
+      "sampler": "euler", "scheduler": "simple",
+      "quality": {"fast": {"steps": 15}, "medium": {"steps": 25}, "high": {"steps": 40}}
+    },
+    "zimage": {
+      "default_quality": "high", "cfg_scale": 1.0,
+      "sampler": "euler", "scheduler": "simple",
+      "quality": {"fast": {"steps": 4}, "medium": {"steps": 6}, "high": {"steps": 8}}
+    }
+  }
+}

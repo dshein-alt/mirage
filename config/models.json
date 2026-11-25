@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "minimum_sd_revision": "532d2c15c430a785a712b2d94281f04e733008a4",
+  "models": {
+    "moss": {
+      "name": "MOSS-Image-SFT",
+      "label": "moss",
+      "tasks": ["txt2img"],
+      "license": {"id": "apache-2.0", "url": "https://huggingface.co/OpenMOSS-Team/MOSS-Image-SFT/blob/main/LICENSE"},
+      "components": {
+        "diffusion": {"role": "diffusion", "repository": "leejet/MOSS-Image-SFT-GGUF", "remote_path": "MOSS-Image-SFT-Q4_K.gguf", "local_path": "moss/MOSS-Image-SFT-Q4_K.gguf", "required": true, "bytes": 3327400800, "sha256": "902dbb0364d8b313cd91792b3cfe7c87b987386f0c5414986f3f1027b82b2225", "license": "apache-2.0"},
+        "llm": {"role": "llm", "repository": "unsloth/Qwen3.5-9B-GGUF", "remote_path": "Qwen3.5-9B-Q4_K_M.gguf", "local_path": "moss/Qwen3.5-9B-Q4_K_M.gguf", "required": true, "bytes": 5680522464, "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8", "license": "apache-2.0"},
+        "tokenizer": {"role": "tokenizer", "repository": "OpenMOSS-Team/MOSS-Image-Base", "remote_path": "tokenizer/tokenizer.json", "local_path": "moss/tokenizer.json", "required": true, "bytes": 19989325, "sha256": "06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523", "license": "apache-2.0"},
+        "vae": {"role": "vae", "repository": "Comfy-Org/MOSS-Image", "remote_path": "vae/flux2-vae_small.safetensors", "local_path": "moss/flux2-vae_small.safetensors", "required": true, "bytes": 249521340, "sha256": "d8d52ba036475f5fb07c8b435e176d3d97ebfa82f0d1a1c317f9cc1e25bd013b", "license": "apache-2.0"}
+      }
+    },
+    "qwen": {
+      "name": "Qwen-Image 2.1",
+      "label": "qwen-image-2.1",
+      "tasks": ["txt2img", "edit"],
+      "license": {"id": "qwen-research", "url": "https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE"},
+      "components": {
+        "diffusion": {"role": "diffusion", "repository": "leejet/Qwen-Image-2.1-GGUF", "remote_path": "qwen_image_2.1-Q4_K.gguf", "local_path": "qwen/qwen_image_2.1-Q4_K.gguf", "required": true, "bytes": 4197494816, "sha256": "29f9c83c249ff0292fb2943fceddfa2319b446601866c82a4f8be062abea72c2", "license": "qwen-research"},
+        "llm": {"role": "llm", "repository": "Qwen/Qwen3-VL-8B-Instruct-GGUF", "remote_path": "Qwen3VL-8B-Instruct-Q4_K_M.gguf", "local_path": "qwen/Qwen3VL-8B-Instruct-Q4_K_M.gguf", "required": true, "bytes": 5027784800, "sha256": "67d1659bfe71b89d50b45a4ad1a9e5b997e5bb16ce5da66a6a6167abd569e9e2", "license": "apache-2.0"},
+        "vae": {"role": "vae", "repository": "Comfy-Org/Qwen-Image-2.1", "remote_path": "vae/qwen_image_2.1_vae_bf16.safetensors", "local_path": "qwen/qwen_image_2.1_vae_bf16.safetensors", "required": true, "bytes": 675509688, "sha256": "bb21f7473051e1ac368515dd3f2e15cd44d7a11748ee8823e1ddca3e4876b7c9", "license": "qwen-research"},
+        "vision": {"role": "llm_vision", "repository": "Qwen/Qwen3-VL-8B-Instruct-GGUF", "remote_path": "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf", "local_path": "qwen/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf", "required": false, "required_for": ["edit"], "bytes": 752289728, "sha256": "c6ba85508d82f42590e6eb77d5340369ab6fecf107a7561d809523d8aa5f3bfd", "license": "apache-2.0"}
+      }
+    },
+    "zimage": {
+      "name": "Z-Image Turbo",
+      "label": "z-image-turbo",
+      "tasks": ["txt2img"],
+      "license": {"id": "apache-2.0", "url": "https://huggingface.co/Tongyi-MAI/Z-Image-Turbo/blob/main/LICENSE"},
+      "components": {
+        "diffusion": {"role": "diffusion", "repository": "leejet/Z-Image-Turbo-GGUF", "remote_path": "z_image_turbo-Q4_K.gguf", "local_path": "zimage/z_image_turbo-Q4_K.gguf", "required": true, "bytes": 3864250304, "sha256": "14b375ab4f226bc5378f68f37e899ef3c2242b8541e61e2bc1aff40976086fbd", "license": "apache-2.0"},
+        "llm": {"role": "llm", "repository": "unsloth/Qwen3-4B-Instruct-2507-GGUF", "remote_path": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf", "local_path": "zimage/Qwen3-4B-Instruct-2507-Q4_K_M.gguf", "required": true, "bytes": 2497281120, "sha256": "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597", "license": "apache-2.0"},
+        "vae": {"role": "vae", "repository": "Comfy-Org/Z-Image-Turbo", "remote_path": "split_files/vae/ae.safetensors", "local_path": "zimage/ae.safetensors", "required": true, "bytes": 335304388, "sha256": "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38", "license": "apache-2.0"}
+      }
+    }
+  }
+}

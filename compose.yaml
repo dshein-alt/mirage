@@ -1,0 +1,20 @@
+services:
+  workbench:
+    image: localhost/sd-workbench-app:1
+    container_name: sd-workbench
+    network_mode: host
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      SDWB_DATA_DIR: /data
+      SDWB_HOST_DATA_DIR: ${SDWB_HOST_DATA_DIR:?Set to the absolute host data directory}
+      SDWB_ENGINE_SOCKET: /run/engine.sock
+      SDWB_CONTAINER_ENGINE: ${SDWB_CONTAINER_ENGINE:-podman}
+      HF_TOKEN: ${HF_TOKEN:-}
+      SDWB_API_TOKEN: ${SDWB_API_TOKEN:-}
+      SDWB_BROWSER_TOKEN: ${SDWB_BROWSER_TOKEN:-}
+    volumes:
+      - ${SDWB_HOST_DATA_DIR:?}:/data:rw
+      - ${CONTAINER_SOCKET:?Set to the host engine socket}:/run/engine.sock:rw
+    restart: unless-stopped

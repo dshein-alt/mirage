@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "server": {"host": "127.0.0.1", "port": 8765},
+  "queue": {"concurrency": 1},
+  "runtime": {
+    "image": "localhost/sd-workbench-runtime:1",
+    "app_image": "localhost/sd-workbench-app:1",
+    "container_prefix": "sd-workbench",
+    "minimum_sd_revision": "532d2c15c430a785a712b2d94281f04e733008a4"
+  },
+  "backend_profiles": {
+    "vulkan-balanced": {
+      "backend": "te=cpu,clip_vision=cpu,diffusion=vulkan0,vae=vulkan0",
+      "extra_args": ["--offload-to-cpu"]
+    }
+  },
+  "models": {
+    "moss": {"backend_profile": "vulkan-balanced", "extra_args": []},
+    "qwen": {"backend_profile": "vulkan-balanced", "extra_args": []},
+    "zimage": {"backend_profile": "vulkan-balanced", "extra_args": ["--diffusion-fa"]}
+  },
+  "security": {"max_upload_bytes": 20971520, "max_prompt_chars": 16000},
+  "environment": {"MESA_VK_DEVICE_SELECT": "1002:1900"}
+}
