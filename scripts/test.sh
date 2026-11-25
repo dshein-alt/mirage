@@ -2,6 +2,6 @@
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$ROOT/scripts/common.sh"
-ENGINE=$(sdwb_engine)
-"$ENGINE" build --target development -f "$ROOT/docker/Dockerfile.app" -t localhost/sd-workbench-test:1 "$ROOT"
-"$ENGINE" run --rm localhost/sd-workbench-test:1 uv run --locked --no-sync pytest -q
+ENGINE=$(mirage_engine)
+"$ENGINE" build --target development -f "$ROOT/docker/Dockerfile.app" -t localhost/mirage-test:1 "$ROOT"
+"$ENGINE" run --rm localhost/mirage-test:1 uv run --locked --no-sync pytest -q

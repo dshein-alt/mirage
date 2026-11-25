@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_shell_syntax():
     for path in [ROOT / "install.sh", *ROOT.glob("scripts/*.sh"), ROOT / "docker/export-runtime.sh"]:
         subprocess.run(["sh", "-n", str(path)], check=True)
-    subprocess.run(["bash", "-n", str(ROOT / "bin/sdwb")], check=True)
+    subprocess.run(["bash", "-n", str(ROOT / "bin/mirage")], check=True)
 
 
 def test_pinned_source_revision():
@@ -18,4 +18,4 @@ def test_pinned_source_revision():
     else:
         import json
         revision = json.loads((ROOT / "config/models.json").read_text())["minimum_sd_revision"]
-    assert revision == "532d2c15c430a785a712b2d94281f04e733008a4"
+    assert revision == "79dc7ca9074d79419a46380cdb95a4524db9b74c"

@@ -1,7 +1,9 @@
 #!/bin/sh
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+DATA=${MIRAGE_DATA_DIR:-$ROOT/data}
 . "$ROOT/scripts/common.sh"
-ENGINE=$(sdwb_engine)
-"$ENGINE" build --target production -f "$ROOT/docker/Dockerfile.app" -t localhost/sd-workbench-app:1 "$ROOT"
-"$ENGINE" build -f "$ROOT/docker/Dockerfile.runtime" -t localhost/sd-workbench-runtime:1 "$ROOT"
+ENGINE=$(mirage_engine)
+PYTHONPATH=$ROOT/src${PYTHONPATH:+:$PYTHONPATH}
+export PYTHONPATH
+exec python3 -m mirage.app_build "$ROOT" "$DATA" "$ENGINE"
