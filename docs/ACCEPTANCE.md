@@ -22,6 +22,8 @@ This checklist distinguishes automated, non-GPU checks from checks that require 
 | Runtime artifact integrity and rollback | `tests/test_runtime.py`; real builder/runtime test required |
 | Image deletion recovery without compilation | Remove builder/runtime images on target, run `mirage runtime repair` and generation; confirm exported host manifest remains |
 | Browser cookie login, CSRF, bearer compatibility, roles | `tests/test_auth.py`; packaged LAN E2E for login, SSE, generation, settings, and image download |
+| Local/authenticated exposure and token validation | `tests/test_auth.py`, `tests/test_installer.py`; inspect published ports and verify unauthenticated LAN requests fail |
+| Custom port persistence and no host networking | Installer and launcher target-host runs; inspect containers and exercise CLI/API through the selected port |
 | Backend/runtime snapshot immutability | `tests/test_jobs.py`; real inference mounts the submitted release |
 | Publication recovery after interruption | `tests/test_jobs.py::test_publication_recovers_after_database_failure` |
 | Streaming upload memory limit | `tests/test_models.py` with omitted and misleading Content-Length |

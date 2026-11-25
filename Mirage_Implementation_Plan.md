@@ -378,7 +378,7 @@ Use browser-executable unit/integration smoke tests with no mandatory Node toolc
 
 ## 14. Settings and security
 
-Default network bind `127.0.0.1`; no public exposure. LAN mode requires explicit opt-in and authentication or trusted reverse proxy. API paths must never expose arbitrary file read/write. Validate HTTP upload sizes/types, safe filename handling and model-repository allowlists. Never use `shell=True` for untrusted inputs. Admin-only endpoint authorization for global settings, runtime builds, model deletion and configuration reset if nonlocal access enabled.
+Default `local` access mode publishes the selected port only on `127.0.0.1`; no public exposure. `authenticated` mode requires explicit opt-in and distinct URL-safe admin and browser tokens. Containers use explicit port publishing rather than host networking. API paths must never expose arbitrary file read/write. Validate HTTP upload sizes/types, safe filename handling and model-repository allowlists. Never use `shell=True` for untrusted inputs. Admin-only endpoint authorization for global settings, runtime builds, model deletion and configuration reset if nonlocal access enabled.
 
 Log paths and secrets carefully: redact HF tokens and credentials. Store optional authentication token in environment/secrets, not JSON manifest or browser. Adopt a simple backup/restore documented procedure for `data/config`, SQLite (consistent backup), models, inputs and outputs.
 

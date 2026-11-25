@@ -57,7 +57,7 @@ If the exact component files are already downloaded, import them without network
 
 The source layout must be `models/moss`, `models/qwen`, and `models/zimage`, matching `config/models.json`. Subsequent `models install` verifies files and downloads only missing components.
 
-Other options include `--data-dir PATH`, `--prefix PATH`, `--runtime podman|docker`, `--skip-build`, `--no-start`, and `--allow-no-gpu`. Run `./install.sh --help` for details. Local installs build the current working tree, including uncommitted changes, without modifying Git state.
+Other options include `--data-dir PATH`, `--prefix PATH`, `--port PORT`, `--mode local|authenticated`, `--runtime podman|docker`, `--skip-build`, `--no-start`, and `--allow-no-gpu`. The default port is 8765. `MIRAGE_PORT` and `MIRAGE_MODE` provide the corresponding environment options; explicit arguments take precedence, and the selected values persist for updates and launcher commands. Run `./install.sh --help` for details. Local installs build the current working tree, including uncommitted changes, without modifying Git state.
 
 ### Standalone installation
 
@@ -179,20 +179,32 @@ mirage logs
 mirage serve
 ```
 
-The API binds to `127.0.0.1` by default. LAN binding requires `MIRAGE_API_TOKEN`; without it startup fails. Deploy only on a trusted home LAN or behind an authenticated HTTPS reverse proxy, not on the public Internet.
+Mirage has two explicit access modes. In the default `local` mode, the published port is bound only to `127.0.0.1`, authentication is bypassed, and local requests have the admin role. In `authenticated` mode, the port is published on all interfaces and both access tokens are required. Containers use explicit port publishing, never host networking. Deploy authenticated mode only on a trusted home LAN or behind an authenticated HTTPS reverse proxy, not on the public Internet.
 
-CLI and integration clients use `Authorization: Bearer <MIRAGE_API_TOKEN>`. The browser instead signs in through a small login form and receives an HttpOnly, SameSite=Strict session cookie, so API requests, EventSource, and image URLs all work without exposing the token to JavaScript. Cookie-authenticated mutations require a per-session CSRF header. Sessions are held in memory; restart the service to invalidate all sessions and require signing in again.
+Select a custom local port or enable authenticated mode through the installer:
 
-Two browser roles are available:
+```sh
+./install.sh update --mode local --port 9000 --non-interactive --models none --skip-models
 
-- `MIRAGE_API_TOKEN` grants the admin role, including global settings, model removal, and runtime operations.
-- Optional `MIRAGE_BROWSER_TOKEN` grants a non-admin role for generation, jobs, gallery, downloads, and model installation, but not administrative operations. The server enforces this distinction independently of hidden UI controls.
+export MIRAGE_API_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+export MIRAGE_BROWSER_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+./install.sh update --mode authenticated --port 8765 --non-interactive --models none --skip-models
+```
+
+Authenticated mode requires both tokens to be different URL-safe strings of 16-64 ASCII letters, digits, underscores, or hyphens. Interactive installation securely prompts for missing tokens. Tokens are read from the environment, never written to the database, settings, installer state, or recovery journal. To rotate them, export new values and rerun the installer update so it recreates the container. Access mode and port changes also require the installer; the web settings API cannot change them in place.
+
+CLI and integration clients use `Authorization: Bearer <MIRAGE_API_TOKEN>`. Either token can be entered in the browser login form. The browser receives an HttpOnly, SameSite=Strict session cookie, so API requests, EventSource, and image URLs work without exposing the token to JavaScript. Cookie-authenticated mutations require a per-session CSRF header. Sessions are held in memory; restart the service to invalidate all sessions and require signing in again.
+
+Two roles are available:
+
+- `MIRAGE_API_TOKEN` grants the admin role through Bearer authentication or browser login, including global settings, model removal, and runtime operations.
+- `MIRAGE_BROWSER_TOKEN` grants a non-admin browser role for generation, jobs, gallery, downloads, and model installation, but not administrative operations. It is not accepted as a Bearer token. The server enforces this distinction independently of hidden UI controls.
 
 Uploads are read in bounded chunks, then decoded and normalized by Pillow. API clients submit generated reference IDs rather than host paths or arbitrary command-line flags. File endpoints accept only database IDs. User input is passed as argv arrays, never shell-concatenated.
 
 The service needs the writable container API socket to create supervised one-shot inference containers. This is a privileged trust boundary: an application compromise can control containers, and rootful Docker socket access can effectively provide host-level privileges. Do not expose the service to untrusted users. A future deployment variant should separate the engine-controlling worker from the HTTP-facing process.
 
-`compose.yaml` is available for users who prefer Compose. Set `MIRAGE_APP_IMAGE` to the immutable image ID or unique tag from the app release manifest, plus `MIRAGE_HOST_DATA_DIR`, `CONTAINER_SOCKET`, and `MIRAGE_CONTAINER_ENGINE`. The shell launcher remains the reference path.
+`compose.yaml` is available for local mode and `compose.authenticated.yaml` for authenticated mode. Set `MIRAGE_APP_IMAGE` to the immutable image ID or unique tag from the app release manifest, plus `MIRAGE_HOST_DATA_DIR`, `CONTAINER_SOCKET`, and `MIRAGE_CONTAINER_ENGINE`. `MIRAGE_PORT` selects the host port and defaults to 8765; no publish-host variable is needed. Use `podman-compose -f compose.authenticated.yaml up -d` for authenticated mode and provide both tokens. Each Compose file sets the matching `MIRAGE_MODE`, and `MIRAGE_PORT` controls both the published port and application listener. The shell installer and launcher remain the reference path.
 
 ## Backup, restore, and upgrade
 
