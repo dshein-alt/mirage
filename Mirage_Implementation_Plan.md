@@ -1,9 +1,13 @@
 # Mirage — Complete Implementation Plan
 
-**Status:** Implementation handoff 1.0  
-**Scope:** Standalone local image-generation application built around `stable-diffusion.cpp` (`sd.cpp`)  
-**Initial target:** Linux desktop (ALT Linux), AMD Radeon 780M (RADV/Vulkan), 32 GB shared RAM, rootless Podman + podman-compose  
-**Interfaces:** Python CLI, JSON HTTP API, buildless local web UI  
+**Status:** Implementation handoff 1.0
+
+**Scope:** Standalone local image-generation application built around `stable-diffusion.cpp` (`sd.cpp`)
+
+**Initial target:** Linux desktop (ALT Linux), AMD Radeon 780M (RADV/Vulkan), 32 GB shared RAM, rootless Podman + podman-compose
+
+**Interfaces:** Python CLI, JSON HTTP API, buildless local web UI
+
 **Out of scope for v1:** Sezam integration, multi-user cloud deployment, training/fine-tuning, custom inference kernels
 
 ## 1. Goal and non-negotiable requirements
