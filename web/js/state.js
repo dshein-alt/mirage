@@ -1,4 +1,4 @@
-export const state = {models: [], config: null, jobs: [], images: [], page: 'generate', selectedReferences: [], generatedReference: null, auth: {role: 'admin', auth_required: false}};
+export const state = {models: [], config: null, jobs: [], images: [], dimensions: [], page: 'generate', selectedReferences: [], generatedReference: null, auth: {role: 'admin', auth_required: false}};
 export function modelById(id) { return state.models.find(model => model.id === id); }
 export function element(tag, options = {}, children = []) {
   const node = document.createElement(tag);

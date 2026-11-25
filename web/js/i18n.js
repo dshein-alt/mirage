@@ -3,7 +3,7 @@ let messages = {};
 let fallback = {};
 
 function selectedLocale() {
-  const manual = localStorage.getItem('sdwb.locale') || 'auto';
+  const manual = localStorage.getItem('mirage.locale') || 'auto';
   if (manual !== 'auto') return manual;
   for (const language of navigator.languages || [navigator.language || 'en']) {
     const base = language.toLowerCase().split('-')[0];
@@ -27,17 +27,17 @@ export function applyTranslations(root = document) {
 
 export async function initI18n() {
   fallback = await fetch('/locales/en.json').then(response => response.json());
-  await setLocale(localStorage.getItem('sdwb.locale') || 'auto', false);
+  await setLocale(localStorage.getItem('mirage.locale') || 'auto', false);
 }
 
 export async function setLocale(preference, notify = true) {
-  localStorage.setItem('sdwb.locale', preference);
+  localStorage.setItem('mirage.locale', preference);
   locale = selectedLocale();
   messages = locale === 'en' ? fallback : await fetch(`/locales/${locale}.json`).then(response => response.json());
   document.documentElement.lang = locale;
   applyTranslations();
   document.querySelectorAll('#language-setting, #language-quick').forEach(control => { control.value = preference; });
-  if (notify) document.dispatchEvent(new CustomEvent('sdwb:locale'));
+  if (notify) document.dispatchEvent(new CustomEvent('mirage:locale'));
 }
 
 export function currentLocale() { return locale; }

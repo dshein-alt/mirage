@@ -14,7 +14,7 @@ function navigate(page) {
   state.page = page; history.replaceState(null, '', `#${page}`);
   document.querySelectorAll('.page').forEach(section => section.classList.toggle('active', section.id === `page-${page}`));
   document.querySelectorAll('.nav-item').forEach(button => button.classList.toggle('active', button.dataset.page === page));
-  document.title = `${t(page)} · SD Workbench`;
+  document.title = `${t(page)} · Mirage`;
   if (page === 'gallery') loadGallery().catch(error => toast(error.message));
   if (page === 'jobs') loadJobs().catch(error => toast(error.message));
   if (page === 'models') loadModels().catch(error => toast(error.message));
@@ -35,6 +35,7 @@ async function startApplication() {
   started = true;
   try {
     const [models, config] = await Promise.all([api.models(), api.config()]); state.models = models; state.config = config;
+    for (const warning of config.warnings || []) toast(warning);
     populateGenerate(); populateGalleryFilters(); await loadJobs();
     document.querySelector('#service-status').textContent = t('ready'); document.querySelector('#service-status').classList.add('ready');
   } catch (error) { document.querySelector('#service-status').textContent = t('offline'); toast(error.message); }
@@ -51,10 +52,10 @@ async function initialize() {
   document.querySelectorAll('.nav-item').forEach(button => button.addEventListener('click', () => navigate(button.dataset.page)));
   document.querySelector('#theme-quick').addEventListener('click', cycleTheme);
   document.querySelector('#language-quick').addEventListener('change', event => setLocale(event.target.value));
-  document.addEventListener('sdwb:jobs-refresh', () => loadJobs().catch(() => {}));
-  document.addEventListener('sdwb:config', () => { populateGenerate(); populateGalleryFilters(); });
-  document.addEventListener('sdwb:locale', () => { populateGenerate(); populateGalleryFilters(); if (state.page === 'gallery') loadGallery(); if (state.page === 'jobs') loadJobs(); if (state.page === 'models') loadModels(); navigate(state.page); });
-  document.addEventListener('sdwb:unauthorized', showLogin);
+  document.addEventListener('mirage:jobs-refresh', () => loadJobs().catch(() => {}));
+  document.addEventListener('mirage:config', () => { populateGenerate(); populateGalleryFilters(); });
+  document.addEventListener('mirage:locale', () => { populateGenerate(); populateGalleryFilters(); if (state.page === 'gallery') loadGallery(); if (state.page === 'jobs') loadJobs(); if (state.page === 'models') loadModels(); navigate(state.page); });
+  document.addEventListener('mirage:unauthorized', showLogin);
   document.querySelector('#auth-dialog').addEventListener('cancel', event => event.preventDefault());
   document.querySelector('#auth-form').addEventListener('submit', async event => {
     event.preventDefault();
