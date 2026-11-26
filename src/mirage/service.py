@@ -4,6 +4,7 @@ import secrets
 import shutil
 import uuid
 
+from . import __version__
 from .config import ConfigService
 from .database import Database
 from .downloader import DownloadManager
@@ -133,7 +134,7 @@ class Application:
     def system(self):
         usage = shutil.disk_usage(self.paths.data)
         return {
-            "version": "1.0.0",
+            "version": __version__,
             "data_dir": str(self.paths.data),
             "disk": {"total": usage.total, "used": usage.used, "free": usage.free},
             "runtime": self.runtime.status(),

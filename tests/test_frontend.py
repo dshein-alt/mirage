@@ -1,8 +1,26 @@
 from html.parser import HTMLParser
 import json
 from pathlib import Path
+import tomllib
+
+from mirage import __version__
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_release_version_is_consistent():
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    lock = tomllib.loads((ROOT / "uv.lock").read_text())
+    package = next(package for package in lock["package"] if package["name"] == "mirage")
+    assert __version__ == project["project"]["version"] == package["version"]
+
+
+def test_settings_display_backend_version():
+    script = (ROOT / "web/js/settings.js").read_text()
+    english = json.loads((ROOT / "web/locales/en.json").read_text())
+    assert "api.health()" in script
+    assert "['mirageVersion', health.version]" in script
+    assert english["mirageVersion"] == "Mirage version"
 
 
 def test_locale_catalogs_match():

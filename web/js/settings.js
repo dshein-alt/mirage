@@ -4,12 +4,12 @@ import {t, setLocale} from './i18n.js';
 import {setTheme} from './theme.js';
 
 export async function loadSettings() {
-  const [config, runtime, settings] = await Promise.all([api.config(), api.runtime(), api.settings()]);
+  const [config, runtime, settings, health] = await Promise.all([api.config(), api.runtime(), api.settings(), api.health()]);
   state.config = config; document.querySelector('#config-editor').value = JSON.stringify(config.document, null, 2);
   document.querySelector('#settings-editor').value = JSON.stringify(settings, null, 2);
   document.querySelector('#config-revision').textContent = config.revision.slice(0, 12);
   const details = document.querySelector('#runtime-details'); details.replaceChildren();
-  for (const [key, value] of [['active', runtime.active ? t('yes') : t('no')], ['revision', runtime.sd_cpp_commit || runtime.revision || t('unknown')], ['buildId', runtime.build_id || t('unknown')], ['runtimeImage', runtime.runtime_image?.id || t('unknown')], ['hostData', runtime.host_data_dir], ['releases', runtime.releases.join(', ')]]) { details.append(document.createElement('dt')); details.lastChild.textContent = t(key); details.append(document.createElement('dd')); details.lastChild.textContent = value; }
+  for (const [key, value] of [['mirageVersion', health.version], ['active', runtime.active ? t('yes') : t('no')], ['revision', runtime.sd_cpp_commit || runtime.revision || t('unknown')], ['buildId', runtime.build_id || t('unknown')], ['runtimeImage', runtime.runtime_image?.id || t('unknown')], ['hostData', runtime.host_data_dir], ['releases', runtime.releases.join(', ')]]) { details.append(document.createElement('dt')); details.lastChild.textContent = t(key); details.append(document.createElement('dd')); details.lastChild.textContent = value; }
 }
 export function initSettings() {
   document.querySelector('#theme-setting').addEventListener('change', event => setTheme(event.target.value));

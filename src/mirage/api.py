@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
+from . import __version__
 from .auth import AuthContext, AuthService, SESSION_COOKIE, SESSION_SECONDS, validate_access_tokens
 from .config import ConfigService
 from .errors import WorkbenchError
@@ -29,7 +30,7 @@ async def lifespan(app):
     application.queue.stop()
 
 
-app = FastAPI(title="Mirage", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Mirage", version=__version__, lifespan=lifespan)
 
 
 def error_response(code, message, status):
@@ -122,7 +123,7 @@ def logout(request: Request):
 def health():
     return {
         "status": "ok",
-        "version": "1.0.0",
+        "version": __version__,
         "deployment_id": os.environ.get("MIRAGE_DEPLOYMENT_ID"),
         "container_image": os.environ.get("MIRAGE_CONTAINER_IMAGE_ID"),
         "maintenance": application.database.maintenance_status(),
