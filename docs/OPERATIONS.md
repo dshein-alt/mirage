@@ -87,7 +87,7 @@ If a download is interrupted, run the same `mirage models install` command again
 
 Select **Install with editing** in the browser, `--models qwen-edit` in the standalone installer, or `mirage models install qwen --with-editing` from the command line to install the vision projector. When a Qwen-Image 2.1 job includes reference images, Mirage selects 4-bit (`q4_1`) storage for the text and reference attention cache. Quantizing the cache can change the output slightly. Text-to-image jobs use sd.cpp’s default cache precision.
 
-Editing needs more available GPU memory than text-to-image generation. In a Vulkan test on a Radeon 780M, one 1024×1024 edit with one reference peaked at 13.4 GiB of device-wide memory usage, compared with 10.5 GiB for 1024×1024 text-to-image. Actual usage depends on the backend, resolution, reference images, and other GPU workloads. If editing slows down or affects desktop responsiveness, try the `sd` resolution preset (512×512) or use a GPU with more memory.
+Editing needs more available GPU memory than text-to-image generation. A GPU with **8 GB of VRAM** can run out of memory for the attention cache, especially at HD and above. When the cache cannot fit, sd.cpp can continue with slower, uncached sampling. Available memory and usage depend on the backend, resolution, reference images, and other GPU workloads. If editing slows down or affects desktop responsiveness, try the `sd` resolution preset (512×512).
 
 ### Use a different release source
 

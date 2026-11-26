@@ -4,6 +4,18 @@
 
 Mirage is a web interface for generating and editing images on your Linux machine. In your browser, write a prompt, track your jobs, and browse or download the results. Mirage runs [`stable-diffusion.cpp`](https://github.com/leejet/stable-diffusion.cpp) locally.
 
+## Web UI and generation examples
+
+| Jobs | Gallery |
+| --- | --- |
+| [![Mirage Jobs page with queued, running, and completed jobs](assets/mirage-web-ui-jobs.png)](assets/mirage-web-ui-jobs.png) | [![Mirage Gallery showing results from three models](assets/mirage-web-ui-gallery.png)](assets/mirage-web-ui-gallery.png) |
+
+All three images were generated at 1024×1024 with the same prompt. Click any image to open the full-size PNG. [Prompt and generation settings](docs/EXAMPLES.md#same-prompt-across-three-models)
+
+| Z-Image Turbo | MOSS-Image-SFT | Qwen-Image 2.1 |
+| --- | --- | --- |
+| [![Z-Image Turbo result](assets/generated/20261126_z-image-turbo_hd_high-0001.png)](assets/generated/20261126_z-image-turbo_hd_high-0001.png) | [![MOSS-Image-SFT result](assets/generated/20261126_moss_hd_high-0001.png)](assets/generated/20261126_moss_hd_high-0001.png) | [![Qwen-Image 2.1 result](assets/generated/20261126_qwen-image-2.1_hd_high-0003.png)](assets/generated/20261126_qwen-image-2.1_hd_high-0003.png) |
+
 ## 1. Install the web interface
 
 You’ll need x86-64 Linux, Python 3.11+, and Podman or Docker with access to its API socket. Mirage automatically selects CUDA for an NVIDIA GPU with a configured NVIDIA Container Toolkit, or Vulkan for a GPU with a render device under `/dev/dri`. Allow at least 8 GB of free space for setup, plus 6.7 GB for the starter model, and an internet connection. CUDA builds require additional space for the CUDA toolchain.
@@ -34,13 +46,9 @@ If you skipped Z-Image Turbo in setup, open **Models**, find **Z-Image Turbo**, 
 2. Follow progress in **Jobs**. You can close the browser tab while Mirage works.
 3. Open **Gallery** to browse or search your finished images. Click an image’s prompt to open its details, then click **Download** to save the PNG. Mirage also stores PNGs and their metadata under `~/.local/share/mirage/data/outputs/` by default.
 
-![Mirage Gallery showing results from Qwen-Image 2.1, MOSS-Image-SFT, and Z-Image Turbo](assets/mirage-web-ui-gallery.png)
-
-[Jobs screenshot and full-size generation examples](docs/EXAMPLES.md)
-
 ## Edit an existing image
 
-Qwen-Image 2.1 editing needs more available GPU memory than text-to-image generation, even with Mirage’s automatic 4-bit attention cache. [Qwen editing and GPU memory](docs/OPERATIONS.md#qwen-editing-and-gpu-memory)
+**GPU memory for Qwen editing.** A GPU with **8 GB of VRAM** can struggle with reference-image editing, especially at HD and above, even with Mirage’s 4-bit attention cache. [Qwen editing setup and memory notes](docs/OPERATIONS.md#qwen-editing-and-gpu-memory)
 
 In **Models**, click **Install** on Qwen-Image 2.1. If Qwen is already installed without its editing component, click **Install with editing**. Once the model is ready, select **Qwen-Image 2.1** in **Generate**, add a file under **Reference images**, and describe the edit, such as `Change the car to dark green`. Click **Queue generation**.
 
