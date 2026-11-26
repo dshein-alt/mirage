@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import socket
 import sqlite3
@@ -41,6 +42,11 @@ MODEL_CHOICES = {
     "qwen-edit": "Qwen-Image 2.1 with editing",
     "moss": "MOSS-Image-SFT",
 }
+
+
+def user_directory(variable, default):
+    path = Path(os.environ.get(variable, ""))
+    return (path if path.is_absolute() else Path.home() / default).resolve()
 
 
 @contextmanager
@@ -232,17 +238,18 @@ class Installer:
             invoked = Path(args.source_dir).resolve() if args.source_dir else Path(__file__).resolve().parent
             if (invoked / "pyproject.toml").is_file():
                 self.local_source = invoked
-        state_default = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "mirage" / "installation.json"
-        self.state_path = Path(args.state_file or os.environ.get("MIRAGE_STATE_FILE") or state_default).resolve()
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        self.app_directory = user_directory("XDG_DATA_HOME", ".local/share") / "mirage"
+        self.default_state_path = user_directory("XDG_STATE_HOME", ".local/state") / "mirage" / "installation.json"
+        self.state_path = Path(args.state_file or os.environ.get("MIRAGE_STATE_FILE") or self.default_state_path).resolve()
+        self.state_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.state = read_json(self.state_path, {}) or {}
+        self.replace_settings = args.replace_settings
         self.journal_path = self.state_path.with_name("recovery-journal.json")
         self.journal = None
         self.source = None
         self.data = None
         self.engine = None
         self.prefix = None
-        self.launcher = None
         self.operation_id = uuid.uuid4().hex[:12]
         self.candidate = f"mirage-candidate-{self.operation_id}"
         self.verifier = f"mirage-verifier-{self.operation_id}"
@@ -255,7 +262,7 @@ class Installer:
             return explicit
         if os.environ.get(environment) is not None:
             return os.environ[environment]
-        if self.state.get(persisted) is not None:
+        if not self.replace_settings and self.state.get(persisted) is not None:
             return self.state[persisted]
         return default
 
@@ -351,7 +358,7 @@ class Installer:
                     raise RuntimeError("release tag is invalid")
                 repository = repository or release.get("repository")
         repository = repository or DEFAULT_RELEASE_REPOSITORY
-        base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")).resolve() / "mirage" / "sources"
+        base = self.app_directory / "sources"
         base.mkdir(parents=True, exist_ok=True)
         arguments = self.git_container_arguments()
         if Path(repository).is_absolute():
@@ -405,8 +412,30 @@ class Installer:
             "path": str(destination),
         }
 
+    def choose_profile(self, terminal, dialog):
+        if not self.state or terminal is None or self.replace_settings:
+            return
+        saved_data = self.state.get("data_dir", self.app_directory / "data")
+        message = f"Saved Mirage setup\n\nData directory: {saved_data}\n\nChoose whether to reuse these settings."
+        if dialog:
+            choice = dialog_prompt(
+                terminal, dialog, "--default-item", "reuse", "--menu", message, "16", "76", "2",
+                "reuse", "Keep the saved settings and data location",
+                "replace", "Start with defaults and replace the settings",
+            )
+        else:
+            print(message, file=terminal)
+            print("  1. Keep the saved settings and data location", file=terminal)
+            print("  2. Start with defaults and replace the settings", file=terminal)
+            while True:
+                choice = read_terminal(terminal, "Setup profile [1]: ").lower() or "1"
+                if choice in ("1", "2", "reuse", "replace"):
+                    break
+                print("Choose 1 or 2.", file=terminal)
+        self.replace_settings = choice in ("2", "replace")
+
     def resolve_server_options(self, terminal=None, dialog=None):
-        server = self.state.get("server", {})
+        server = {} if self.replace_settings else self.state.get("server", {})
         port_override = self.args.port if self.args.port is not None else os.environ.get("MIRAGE_PORT")
         port = port_override if port_override is not None else server.get("port", 8765)
         try:
@@ -453,13 +482,25 @@ class Installer:
                     else:
                         print(error, file=terminal)
 
+    def resolve_data_directory(self):
+        default = self.app_directory / "data"
+        data = Path(self.option("data_dir", "MIRAGE_DATA_DIR", "data_dir", default)).resolve()
+        if self.local_source is not None or self.args.operation != "install":
+            return data
+        if self.args.data_dir is not None or "MIRAGE_DATA_DIR" in os.environ or data.exists():
+            return data
+        previous_source = self.state.get("source_reference") or {}
+        if previous_source.get("kind") == "local" and previous_source.get("path"):
+            checkout = Path(previous_source["path"])
+            if data == (checkout / "data").resolve() and not (checkout / "pyproject.toml").is_file():
+                return default.resolve()
+        return data
+
     def resolve_options(self):
-        standalone_default = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "mirage" / "data"
-        data_default = (self.local_source / "data") if self.local_source else standalone_default
-        self.data = Path(self.option("data_dir", "MIRAGE_DATA_DIR", "data_dir", data_default)).resolve()
+        self.data = self.resolve_data_directory()
         self.prefix = Path(self.option("prefix", "MIRAGE_PREFIX", "prefix", Path.home() / ".local" / "bin")).resolve()
-        self.launcher = self.prefix / "mirage"
-        engine = self.option("engine", "MIRAGE_CONTAINER_ENGINE", "engine")
+        installed_engine = self.state.get("engine") if self.state.get("container") else None
+        engine = self.option("engine", "MIRAGE_CONTAINER_ENGINE", "engine", installed_engine)
         if not engine:
             engine = "podman" if shutil.which("podman") else "docker" if shutil.which("docker") else None
         if engine not in ("podman", "docker") or not shutil.which(engine):
@@ -476,7 +517,7 @@ class Installer:
     def initialize_config(self):
         for name in ("generation-presets", "settings"):
             destination = self.data / "config" / f"{name}.json"
-            if not destination.exists():
+            if self.replace_settings or not destination.exists():
                 shutil.copy2(self.source / "config" / f"{name}.default.json", destination)
         settings_path = self.data / "config" / "settings.json"
         settings = read_json(settings_path)
@@ -611,7 +652,9 @@ class Installer:
             connection.execute("DELETE FROM admitted_writes")
         release = root / "runtimes" / "releases" / runtime_build
         release.parent.mkdir(parents=True)
-        shutil.copytree(self.data / "runtimes" / "releases" / runtime_build, release, copy_function=os.link)
+        live_release = self.data / "runtimes" / "releases" / runtime_build
+        copy_artifact = os.link if live_release.stat().st_dev == release.parent.stat().st_dev else shutil.copy2
+        shutil.copytree(live_release, release, copy_function=copy_artifact)
         (root / "runtimes" / "current").symlink_to(Path("releases") / runtime_build)
         for name in ("models", "inputs", "outputs", "thumbnails", "logs", "downloads"):
             (root / name).mkdir()
@@ -655,13 +698,79 @@ class Installer:
         temporary.symlink_to(Path("releases") / build_id)
         os.replace(temporary, current)
 
-    def install_launcher(self):
-        self.prefix.mkdir(parents=True, exist_ok=True)
+    @staticmethod
+    def recorded_launchers(state):
+        paths = state.get("launcher_links")
+        if paths is None:
+            paths = [state["launcher"]] if state.get("launcher") else []
+        return tuple(Path(path) for path in paths)
+
+    def owned_launcher(self, path, state):
+        return (
+            path in self.recorded_launchers(state)
+            and path.is_symlink()
+            and os.readlink(path) == state.get("launcher_target")
+        )
+
+    @property
+    def custom_launcher_target(self):
+        return self.state_path.with_name(f".{self.state_path.name}.launcher")
+
+    def plan_launcher_links(self):
         target = self.source / "bin" / "mirage"
-        temporary = self.prefix / f".mirage.{os.getpid()}.tmp"
-        temporary.unlink(missing_ok=True)
-        temporary.symlink_to(target)
-        os.replace(temporary, self.launcher)
+        if self.state_path != self.default_state_path:
+            target = self.custom_launcher_target
+            if (target.exists() or target.is_symlink()) and (
+                target.is_symlink() or self.state.get("launcher_target") != str(target)
+            ):
+                raise RuntimeError(f"Mirage launcher target already exists at {target}")
+        paths = dict.fromkeys(
+            directory.resolve() / "mirage" for directory in
+            (self.prefix, Path.home() / ".local" / "bin", Path.home() / "bin")
+        )
+        links = []
+        for path in paths:
+            if self.owned_launcher(path, self.state) or not (path.exists() or path.is_symlink()):
+                links.append(path)
+            else:
+                print(f"Keeping the existing command at {path}")
+        if not links:
+            raise RuntimeError("none of the Mirage command locations are available")
+        return target, links
+
+    def remove_launchers(self, state, keep=()):
+        for path in self.recorded_launchers(state):
+            if path not in keep and self.owned_launcher(path, state):
+                path.unlink()
+
+    def install_launcher(self, previous_state):
+        target = Path(self.state["launcher_target"])
+        links = self.recorded_launchers(self.state)
+        if target == self.custom_launcher_target:
+            entry = Path(self.state["source_reference"]["path"]) / "bin" / "mirage"
+            script = f'#!/bin/sh\nexport MIRAGE_STATE_FILE={shlex.quote(str(self.state_path))}\nexec {shlex.quote(str(entry))} "$@"\n'
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=target.parent, delete=False) as stream:
+                temporary = Path(stream.name)
+                try:
+                    stream.write(script)
+                    stream.flush()
+                    temporary.chmod(0o700)
+                    os.replace(temporary, target)
+                finally:
+                    temporary.unlink(missing_ok=True)
+        for path in links:
+            if self.owned_launcher(path, self.state):
+                continue
+            if (path.is_symlink() or path.exists()) and not self.owned_launcher(path, previous_state):
+                raise RuntimeError(f"Mirage command location is in use at {path}")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_name(f".mirage.{os.getpid()}.tmp")
+            temporary.symlink_to(target)
+            try:
+                os.replace(temporary, path)
+            finally:
+                temporary.unlink(missing_ok=True)
+        self.remove_launchers(previous_state, links)
 
     def selected_models(self, terminal=None, dialog=None):
         selection = self.option("models", "MIRAGE_MODELS", "models", "zimage")
@@ -741,19 +850,25 @@ class Installer:
         self.save_journal()
 
     def install_or_update(self, operation):
-        self.resolve_options()
         with installer_terminal(self.args.non_interactive) as terminal:
             dialog = None
             if terminal is not None and os.environ.get("TERM") not in (None, "", "dumb"):
                 dialog = shutil.which("dialog") or shutil.which("whiptail")
+            self.choose_profile(terminal, dialog)
+            self.resolve_options()
             self.resolve_server_options(terminal, dialog)
             selection = self.selected_models(terminal, dialog)
             token = self.credentials(terminal)
         source_reference = self.resolve_source()
+        launcher_target, launcher_links = self.plan_launcher_links()
         original_running = self.container_running("mirage")
         if operation == "update" and not self.container_exists("mirage"):
             raise RuntimeError("no installed Mirage container was found")
-        if busy_jobs(self.data):
+        recorded_data = self.state.get("data_dir")
+        old_data = Path(recorded_data).resolve() if original_running and recorded_data else None
+        if old_data == self.data or (old_data and not (old_data / DATABASE_NAME).is_file()):
+            old_data = None
+        if busy_jobs(self.data) or (old_data and busy_jobs(old_data)):
             raise RuntimeError("queued or running jobs prevent installation")
         self.new_journal(operation, original_running)
         try:
@@ -769,8 +884,11 @@ class Installer:
                 self.intent("initialize-database")
                 self.offline_migrate(image, deployment)
                 self.completed("initialize-database")
-            self.intent("maintenance")
+            self.intent("maintenance", previous_data_dir=str(old_data) if old_data else None)
             enter_maintenance(self.data, self.operation_id)
+            if old_data:
+                enter_maintenance(old_data, self.operation_id)
+                wait_for_writes(old_data)
             wait_for_writes(self.data)
             self.completed("maintenance")
             if original_running:
@@ -822,8 +940,9 @@ class Installer:
                 "data_dir": str(self.data),
                 "engine": self.engine,
                 "prefix": str(self.prefix),
-                "launcher": str(self.launcher),
-                "launcher_target": str(self.source / "bin" / "mirage"),
+                "launcher": str(launcher_links[0]),
+                "launcher_links": [str(path) for path in launcher_links],
+                "launcher_target": str(launcher_target),
                 "source_reference": source_reference,
                 "deployment_id": deployment,
                 "server": settings["server"],
@@ -843,9 +962,11 @@ class Installer:
             self.completed("commit")
             self.intent("open-admission")
             leave_maintenance(self.data, self.operation_id)
+            if old_data:
+                leave_maintenance(old_data, self.operation_id)
             self.completed("open-admission")
             self.intent("launcher")
-            self.install_launcher()
+            self.install_launcher(self.journal["original_state"])
             self.completed("launcher")
             if selection != "none" and not self.args.skip_models:
                 self.install_models(selection, image)
@@ -854,7 +975,11 @@ class Installer:
             self.journal_path.unlink(missing_ok=True)
             self.journal = None
             exposure = "loopback only" if self.mode == "local" else "all interfaces"
-            print(f"Mirage is ready: http://127.0.0.1:{port}\nAccess mode: {self.mode} ({exposure})\nCommand: {self.launcher}\nPersistent data: {self.data}")
+            print(f"Mirage is ready: http://127.0.0.1:{port}\nAccess mode: {self.mode} ({exposure})\nPersistent data: {self.data}")
+            print("Command links: " + ", ".join(str(path) for path in launcher_links))
+            print("Use mirage stop and mirage start to control the service, and mirage --help to see other commands.")
+            if shutil.which("mirage") not in new_state["launcher_links"]:
+                print(f"Put {launcher_links[0].parent} on PATH, or run {launcher_links[0]} directly.")
         except BaseException:
             self.recover()
             raise
@@ -863,6 +988,9 @@ class Installer:
                 shutil.rmtree(self.journal["verification_dir"], ignore_errors=True)
 
     def release_recovery_maintenance(self, journal):
+        previous_data = journal.get("previous_data_dir")
+        if previous_data and (Path(previous_data) / DATABASE_NAME).is_file():
+            leave_maintenance(previous_data, journal["operation_id"], ignore_other_owner=True)
         if not (self.data / DATABASE_NAME).is_file():
             return
         owner = journal["operation_id"]
@@ -885,6 +1013,8 @@ class Installer:
         self.data = Path(journal["data_dir"])
         if journal.get("committed") or journal.get("operation") == "remove":
             self.release_recovery_maintenance(journal)
+            if self.state.get("launcher_links") and journal.get("operation") != "remove" and "launcher" not in journal.get("actions", []):
+                self.install_launcher(journal.get("original_state") or {})
             self.journal_path.unlink(missing_ok=True)
             self.journal = None
             return
@@ -922,7 +1052,8 @@ class Installer:
         if journal.get("original_running") and "stop-original" in actions and not self.container_running("mirage"):
             self.run_engine("start", "mirage")
             original_state = journal.get("original_state", {})
-            settings = read_json(self.data / "config" / "settings.json", {})
+            original_data = Path(original_state.get("data_dir") or self.data)
+            settings = read_json(original_data / "config" / "settings.json", {})
             self.wait_health(
                 settings.get("server", {}).get("port", 8765),
                 original_state.get("deployment_id"),
@@ -964,7 +1095,6 @@ class Installer:
             raise RuntimeError("the recorded Mirage data directory is missing or has moved")
         self.data = data
         self.engine = self.state.get("engine") or ("podman" if shutil.which("podman") else "docker")
-        self.launcher = Path(self.state.get("launcher", Path.home() / ".local" / "bin" / "mirage"))
         purge_models, purge_data = self.confirm_removal()
         if (purge_models or purge_data) and self.data in (Path(self.data.anchor), Path.home().resolve()):
             raise RuntimeError("purging requires a Mirage data directory outside the home or filesystem root itself")
@@ -1001,8 +1131,9 @@ class Installer:
             for image in images:
                 if image and self.image_exists(image):
                     self.run_engine("rmi", image)
-            if self.launcher.is_symlink() and Path(os.readlink(self.launcher)) == Path(self.state.get("launcher_target", "")):
-                self.launcher.unlink()
+            self.remove_launchers(self.state)
+            if self.state.get("launcher_target") == str(self.custom_launcher_target):
+                self.custom_launcher_target.unlink(missing_ok=True)
             self.journal["committed"] = True
             self.save_journal()
             if (self.data / DATABASE_NAME).is_file():
@@ -1052,6 +1183,7 @@ def parser():
     result.add_argument("--skip-models", action="store_true")
     result.add_argument("--no-start", action="store_true")
     result.add_argument("--non-interactive", action="store_true")
+    result.add_argument("--replace-settings", action="store_true", help="start with default settings and data location")
     result.add_argument("--allow-no-gpu", action="store_true")
     result.add_argument("--yes", action="store_true")
     result.add_argument("--purge-models", action="store_true", help="remove downloaded model weights and partial downloads")

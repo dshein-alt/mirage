@@ -1,9 +1,27 @@
 #!/bin/bash
 set -euo pipefail
 
+case "${1:-}" in
+    -h|--help)
+        printf '%s\n' \
+            'Usage: mirage COMMAND [OPTIONS]' \
+            '' \
+            'Service commands: start, stop, restart, serve, logs' \
+            'Image commands: generate, jobs, gallery, models' \
+            'Maintenance commands: config, runtime, backup' \
+            '' \
+            'Use mirage COMMAND --help for image and configuration options.'
+        exit
+        ;;
+esac
+
 SOURCE=$(readlink -f "${BASH_SOURCE[0]}")
 ROOT=$(CDPATH= cd -- "$(dirname -- "$SOURCE")/.." && pwd)
-STATE_FILE=${MIRAGE_STATE_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/mirage/installation.json}
+case "${XDG_STATE_HOME:-}" in
+    /*) STATE_ROOT=$XDG_STATE_HOME ;;
+    *) STATE_ROOT=$HOME/.local/state ;;
+esac
+STATE_FILE=${MIRAGE_STATE_FILE:-$STATE_ROOT/mirage/installation.json}
 STATE_VALUES=()
 if [[ -f "$STATE_FILE" ]]; then
     mapfile -t STATE_VALUES < <(python3 - "$STATE_FILE" <<'PY'
@@ -26,7 +44,11 @@ for value in (
 PY
     )
 fi
-DATA=${MIRAGE_DATA_DIR:-${STATE_VALUES[0]:-$ROOT/data}}
+case "${XDG_DATA_HOME:-}" in
+    /*) DATA_ROOT=$XDG_DATA_HOME ;;
+    *) DATA_ROOT=$HOME/.local/share ;;
+esac
+DATA=${MIRAGE_DATA_DIR:-${STATE_VALUES[0]:-$DATA_ROOT/mirage/data}}
 if [[ -z "${MIRAGE_CONTAINER_ENGINE:-}" && -n "${STATE_VALUES[1]:-}" ]]; then
     export MIRAGE_CONTAINER_ENGINE=${STATE_VALUES[1]}
 fi
@@ -140,6 +162,7 @@ case "${1:-}" in
         fi
         ;;
     backup)
+        export MIRAGE_DATA_DIR="$DATA"
         exec "$ROOT/scripts/backup.sh"
         ;;
 esac

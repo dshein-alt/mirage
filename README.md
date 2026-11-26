@@ -16,9 +16,13 @@ curl -fsSL https://raw.githubusercontent.com/dshein-alt/mirage/master/install.sh
 
 Run the same installation with Python’s standard library if you have no `curl`. [Python-only installer](docs/OPERATIONS.md#install-with-python)
 
-In the setup prompts, choose **local** access from this machine or **authenticated** access with sign-in tokens, then choose a port and the models to download. The defaults are **local**, port **8765**, and **Z-Image Turbo**.
+If the installer finds a saved setup, choose whether to reuse it or start with defaults. Then choose **local** or **authenticated** access, a port, and the models to download. [Installer screens](docs/OPERATIONS.md#interactive-setup)
+
+![Interactive Mirage installer showing the model selection checklist](assets/mirage-setup-models.png)
 
 When the installer prints `Mirage is ready`, open the address it shows. The default is **[http://127.0.0.1:8765](http://127.0.0.1:8765)**. For authenticated access, sign in with your browser token.
+
+Use `mirage stop` and `mirage start` from any directory. You can also run `~/.local/bin/mirage` by path. [Command-line usage](docs/OPERATIONS.md#use-the-command-line)
 
 ## 2. Add a model in the browser
 
@@ -28,7 +32,7 @@ If you skipped Z-Image Turbo in setup, open **Models**, find **Z-Image Turbo**, 
 
 1. Open **Generate** and select **Z-Image Turbo**. Enter a prompt such as `A red fox reading under an oak tree`, choose a resolution and quality, then click **Queue generation**.
 2. Follow progress in **Jobs**. You can close the browser tab while Mirage works.
-3. Open **Gallery** to browse or search your finished images. Click an image’s prompt to open its details, then click **Download** to save the PNG. Mirage also stores PNGs and their metadata in `data/outputs/` by default.
+3. Open **Gallery** to browse or search your finished images. Click an image’s prompt to open its details, then click **Download** to save the PNG. Mirage also stores PNGs and their metadata under `~/.local/share/mirage/data/outputs/` by default.
 
 ## Edit an existing image
 

@@ -22,11 +22,24 @@ curl -fsSL https://raw.githubusercontent.com/dshein-alt/mirage/master/install.sh
   sh -s -- --data-dir "$HOME/mirage-data" --port 9000 --runtime docker
 ```
 
-Standalone installs store data in `~/.local/share/mirage/data` by default and keep the versioned source separately in `~/.local/share/mirage/sources`. Both paths respect `XDG_DATA_HOME`. The default port is `8765`, and the installer selects Podman when both engines are installed. It remembers the data directory, engine, access mode, and port. Use `--prefix` to change where the launcher is linked.
+| What Mirage stores | Default location | Override |
+| --- | --- | --- |
+| Installed source for standalone setups | `~/.local/share/mirage/sources/` | `XDG_DATA_HOME` |
+| Models, images, settings, and database | `~/.local/share/mirage/data/` | `--data-dir` or `MIRAGE_DATA_DIR` |
+| Installation record | `~/.local/state/mirage/installation.json` | `--state-file`, `MIRAGE_STATE_FILE`, or `XDG_STATE_HOME` |
+| Command links | `~/.local/bin/mirage` and `~/bin/mirage` | `--prefix` adds a link in another directory |
 
-The installer presents the access mode, port, and model selection in `dialog` or `whiptail` when either is available. It uses plain terminal prompts on systems without these tools. Updates prefill your saved choices. Command-line arguments and environment variables can supply individual choices. Use `--non-interactive` to skip all prompts.
+The data directory follows `XDG_DATA_HOME` when no separate data directory is set. Model weights live in its `models/` subdirectory. To build from a development checkout, initialize its submodules and run `./install.sh` from the checkout. The installed data uses the same default location.
 
-To build from a development checkout, initialize its submodules and run `./install.sh` from the checkout. This path uses host Git and defaults to `./data`.
+### Interactive setup
+
+When Mirage finds a saved setup, choose **reuse** to keep its settings and data location or **replace** to start with defaults. If the data location changes, old models, images, and job history stay at their previous location. Explicit options still apply. Use `--non-interactive --replace-settings` to replace the saved setup without prompts.
+
+![Mirage terminal menu offering to reuse or replace a saved setup](../assets/mirage-setup-profile.png)
+
+The installer then prompts for access mode, port, and the models to install. It uses `dialog` or `whiptail` when available and plain terminal prompts otherwise. New setups default to local access, port `8765`, and Z-Image Turbo.
+
+![Mirage terminal checklist with Z-Image Turbo selected](../assets/mirage-setup-models.png)
 
 ### Unattended setup and local model files
 
@@ -58,7 +71,7 @@ curl -fsSL https://raw.githubusercontent.com/dshein-alt/mirage/master/install.sh
 
 ## Use the command line
 
-The installer links `mirage` into `~/.local/bin`. If your shell cannot find it, add that directory to your `PATH` or run `~/.local/bin/mirage` directly. Browser and terminal submissions use the same queue.
+The installer prints the command links it created. Use `mirage --help` to see service, image, and maintenance commands. If your shell cannot find `mirage`, add one of the printed directories to `PATH` or run a printed link by its full path. Browser and terminal submissions use the same queue.
 
 ```sh
 mirage models install qwen --with-editing --wait
@@ -142,7 +155,9 @@ Press Enter at either data prompt to keep that group. For an unattended uninstal
 
 ## Back up and restore data
 
-The data directory contains the SQLite database, settings, reference images, generated PNGs and metadata, model files, and compiled runtimes. Use the path printed by the installer, which defaults to `~/.local/share/mirage/data` for standalone installs and `./data` for a checkout.
+The data directory contains the SQLite database, settings, reference images, generated PNGs and metadata, model files, and compiled runtimes. Use the path printed by the installer. It defaults to `~/.local/share/mirage/data`.
+
+While Mirage is running, use `mirage backup` to copy the database, settings, and images into the data directory’s `backups/` folder. For a full copy that includes model weights and compiled runtimes, use the following steps.
 
 Wait for active jobs to finish, then stop Mirage and copy the full directory. Allow enough free space for the models and runtimes as well as the images.
 

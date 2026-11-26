@@ -37,6 +37,122 @@ def test_default_operation_and_option_precedence(tmp_path, monkeypatch):
     assert installer.option("data_dir", "MIRAGE_DATA_DIR", "data_dir", "/default") == "/explicit"
 
 
+def test_standalone_install_uses_standard_data_directory_after_checkout_moves(tmp_path, monkeypatch):
+    checkout = tmp_path / "old-checkout"
+    previous_data = checkout / "data"
+    standalone = tmp_path / "xdg-data" / "mirage" / "data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
+    monkeypatch.delenv("MIRAGE_DATA_DIR", raising=False)
+    installer = make_installer(tmp_path, ["--standalone"])
+    installer.state = {"data_dir": str(previous_data), "source_reference": {"kind": "local", "path": str(checkout)}}
+
+    assert installer.resolve_data_directory() == standalone
+    assert not checkout.exists()
+
+    previous_data.mkdir(parents=True)
+    assert installer.resolve_data_directory() == previous_data
+
+
+def test_standalone_install_preserves_explicit_data_and_update_paths(tmp_path, monkeypatch):
+    checkout = tmp_path / "old-checkout"
+    previous_data = checkout / "data"
+    state = {"data_dir": str(previous_data), "source_reference": {"kind": "local", "path": str(checkout)}}
+    monkeypatch.delenv("MIRAGE_DATA_DIR", raising=False)
+
+    update = make_installer(tmp_path, ["update", "--standalone"])
+    update.state = state
+    assert update.resolve_data_directory() == previous_data
+
+    explicit = make_installer(tmp_path, ["--standalone", "--data-dir", str(tmp_path / "explicit")])
+    explicit.state = state
+    monkeypatch.setenv("MIRAGE_DATA_DIR", str(tmp_path / "environment"))
+    assert explicit.resolve_data_directory() == tmp_path / "explicit"
+    explicit.args.data_dir = None
+    assert explicit.resolve_data_directory() == tmp_path / "environment"
+
+    monkeypatch.delenv("MIRAGE_DATA_DIR")
+    explicit.state = {**state, "data_dir": str(tmp_path / "custom")}
+    assert explicit.resolve_data_directory() == tmp_path / "custom"
+
+
+@pytest.mark.parametrize("frontend", ["text", "dialog"])
+def test_replacing_profile_uses_standard_data_and_resets_settings(tmp_path, monkeypatch, frontend):
+    for name in ("MIRAGE_DATA_DIR", "MIRAGE_MODE", "MIRAGE_PORT"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "share"))
+    installer = make_installer(tmp_path, ["update"])
+    old_data = tmp_path / "development" / "data"
+    old_data.mkdir(parents=True)
+    original_state = {"data_dir": str(old_data), "server": {"mode": "authenticated", "port": 9142}}
+    installer.state = original_state
+    terminal = Mock()
+    terminal.readline.return_value = "2\n"
+    dialog = Mock(return_value="replace")
+    monkeypatch.setattr(installer_module, "dialog_prompt", dialog)
+
+    installer.choose_profile(terminal, "dialog" if frontend == "dialog" else None)
+    installer.resolve_server_options()
+    installer.data = installer.resolve_data_directory()
+    installer.source = ROOT
+    config = installer.data / "config"
+    config.mkdir(parents=True)
+    (config / "settings.json").write_text('{"old": true}')
+    (config / "generation-presets.json").write_text('{"old": true}')
+    (installer.data / "mirage.sqlite3").touch()
+    installer.initialize_config()
+
+    assert installer.state == original_state
+    assert (installer.mode, installer.port) == ("local", 8765)
+    assert installer.data == tmp_path / "share" / "mirage" / "data"
+    assert old_data.is_dir() and (installer.data / "mirage.sqlite3").is_file()
+    assert "old" not in json.loads((config / "settings.json").read_text())
+    assert "old" not in json.loads((config / "generation-presets.json").read_text())
+
+
+def test_default_install_paths_and_links(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in ("XDG_DATA_HOME", "XDG_STATE_HOME", "MIRAGE_STATE_FILE", "MIRAGE_DATA_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    installer = installer_module.Installer(installer_module.parser().parse_args([]))
+    installer.source = ROOT
+    installer.prefix = tmp_path / ".local" / "bin"
+    assert installer.resolve_data_directory() == tmp_path / ".local" / "share" / "mirage" / "data"
+    assert installer.state_path == tmp_path / ".local" / "state" / "mirage" / "installation.json"
+    target, links = installer.plan_launcher_links()
+    assert links == [tmp_path / ".local" / "bin" / "mirage", tmp_path / "bin" / "mirage"]
+    installer.state = {"launcher_links": [str(path) for path in links], "launcher_target": str(target)}
+    installer.install_launcher({})
+
+    assert all(path.is_symlink() and path.resolve() == ROOT / "bin" / "mirage" for path in links)
+    installer.remove_launchers(installer.state)
+    assert all(not path.is_symlink() for path in links)
+
+
+def test_custom_launcher_uses_selected_state_and_leaves_existing_command(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    installer = make_installer(tmp_path)
+    installer.prefix = tmp_path / "custom"
+    installer.source = tmp_path / "source"
+    entry = installer.source / "bin" / "mirage"
+    entry.parent.mkdir(parents=True)
+    entry.write_text('#!/bin/sh\nprintf "%s:%s" "$MIRAGE_STATE_FILE" "$1"\n')
+    entry.chmod(0o700)
+    unrelated = tmp_path / "bin" / "mirage"
+    unrelated.parent.mkdir()
+    unrelated.write_text("unrelated")
+
+    target, links = installer.plan_launcher_links()
+    installer.state = {
+        "launcher_links": [str(path) for path in links], "launcher_target": str(target),
+        "source_reference": {"path": str(installer.source)},
+    }
+    installer.install_launcher({})
+
+    assert links == [tmp_path / "custom" / "mirage", tmp_path / ".local" / "bin" / "mirage"]
+    assert subprocess.check_output([links[1], "start"], text=True) == f"{installer.state_path}:start"
+    assert unrelated.read_text() == "unrelated"
+
+
 def test_server_option_precedence(tmp_path, monkeypatch):
     installer = make_installer(tmp_path)
     installer.state = {"server": {"mode": "authenticated", "port": 9000}}
@@ -311,6 +427,23 @@ def test_retry_recovers_legacy_initialization_without_releasing_other_owners(tmp
     monkeypatch.setattr(retry, "install_or_update", next_operation)
     retry.run()
     assert not retry.journal_path.exists()
+
+
+def test_profile_switch_recovery_releases_maintenance_on_both_data_directories(tmp_path):
+    installer, data, _ = recovery_fixture(tmp_path)
+    old_data = tmp_path / "previous-data"
+    old_data.mkdir()
+    installer_module.enter_maintenance(old_data, "recovery-test")
+    installer.journal["previous_data_dir"] = str(old_data)
+
+    installer.recover()
+
+    for directory in (data, old_data):
+        connection = installer_module.connect_database(directory)
+        try:
+            assert tuple(connection.execute("SELECT active, owner FROM maintenance").fetchone()) == (0, None)
+        finally:
+            connection.close()
 
 
 def test_update_recovery_keeps_live_container_and_restores_settings_before_cutover(tmp_path, monkeypatch):

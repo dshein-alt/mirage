@@ -7,7 +7,7 @@ ENGINE=$(mirage_engine)
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 DEST=$DATA/backups/$STAMP
 mkdir -p "$DEST"
-"$ENGINE" exec mirage python -c 'from mirage.database import Database; from pathlib import Path; db=Database(Path("/data/mirage.sqlite3")); db.backup(Path("'"$DEST"'/mirage.sqlite3")); db.close()'
+"$ENGINE" exec mirage python -c 'import sys; from mirage.database import Database; from pathlib import Path; db=Database(Path("/data/mirage.sqlite3")); db.backup(Path(sys.argv[1])); db.close()' "/data/backups/$STAMP/mirage.sqlite3"
 for item in config inputs outputs; do
     [ ! -e "$DATA/$item" ] || cp -a "$DATA/$item" "$DEST/"
 done
