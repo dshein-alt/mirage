@@ -50,8 +50,12 @@ def build_app(root, data, engine, *, git_command=None):
     manifest_path = destination / "manifest.json"
     if manifest_path.is_file():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        immutable = image_id(engine, manifest["app_image"]["id"])
-        return manifest
+        try:
+            image_id(engine, manifest["app_image"]["id"])
+        except RuntimeError:
+            pass
+        else:
+            return manifest
     run([engine, "build", "--target", "production", "-f", root / "docker" / "Dockerfile.app", "-t", reference, root])
     immutable = image_id(engine, reference)
     manifest = {

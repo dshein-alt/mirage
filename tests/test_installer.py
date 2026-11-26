@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 import importlib.util
 import json
 import os
@@ -249,6 +250,118 @@ def test_recovery_after_commit_preserves_migrated_database(tmp_path):
     installer.recover()
     assert json.loads((data / "config" / "settings.json").read_text()) == {"migrated": True}
     assert os.readlink(data / "runtimes" / "current") == "releases/new"
+    connection = installer_module.connect_database(data)
+    assert connection.execute("SELECT active FROM maintenance").fetchone()[0] == 0
+    connection.close()
+
+
+def test_update_recovery_keeps_live_container_and_restores_settings_before_cutover(tmp_path, monkeypatch):
+    installer, data, _ = recovery_fixture(tmp_path)
+    installer.journal.update({
+        "original_container": "mirage-original-test",
+        "original_running": True,
+        "actions": ["snapshot-config"],
+        "pending_action": "initialize-config",
+    })
+    monkeypatch.setattr(installer, "container_exists", lambda name: name == "mirage")
+    stop = Mock()
+    engine = Mock()
+    monkeypatch.setattr(installer, "stop_container", stop)
+    monkeypatch.setattr(installer, "run_engine", engine)
+
+    installer.recover()
+
+    stop.assert_not_called()
+    engine.assert_not_called()
+    assert json.loads((data / "config" / "settings.json").read_text()) == {"original": True}
+
+
+def test_update_recovery_restarts_original_after_interrupted_stop(tmp_path, monkeypatch):
+    installer, _, _ = recovery_fixture(tmp_path)
+    installer.journal.update({
+        "original_container": "mirage-original-test",
+        "original_running": True,
+        "actions": ["snapshot-config", "initialize-config"],
+        "pending_action": "stop-original",
+    })
+    monkeypatch.setattr(installer, "container_exists", lambda name: name == "mirage")
+    monkeypatch.setattr(installer, "container_running", lambda name: False)
+    engine = Mock()
+    monkeypatch.setattr(installer, "run_engine", engine)
+    monkeypatch.setattr(installer, "wait_health", Mock())
+
+    installer.recover()
+
+    engine.assert_called_once_with("start", "mirage")
+
+
+def removal_fixture(tmp_path, monkeypatch, arguments):
+    installer = make_installer(tmp_path, ["remove", *arguments])
+    data = tmp_path / "data"
+    data.mkdir()
+    installer_module.connect_database(data).close()
+    for group in ("models", "downloads", "outputs", "inputs", "thumbnails", "logs", "backups", "config", "runtimes"):
+        path = data / group
+        path.mkdir()
+        (path / "fixture").touch()
+    installer.state = {"engine": "podman", "data_dir": str(data), "app_image": {"id": "app-image"}}
+    monkeypatch.setattr(installer, "run_engine", Mock())
+    monkeypatch.setattr(installer, "stop_container", Mock())
+    monkeypatch.setattr(installer, "container_running", lambda name: False)
+    monkeypatch.setattr(installer, "image_exists", lambda image: False)
+    return installer, data
+
+
+@pytest.mark.parametrize("flags,keep_models,keep_user_data", [
+    ([], True, True),
+    (["--purge-models"], False, True),
+    (["--purge-data"], True, False),
+    (["--purge-models", "--purge-data"], False, False),
+])
+def test_unattended_removal_purges_only_selected_groups(tmp_path, monkeypatch, flags, keep_models, keep_user_data):
+    installer, data = removal_fixture(tmp_path, monkeypatch, ["--yes", "--non-interactive", *flags])
+
+    installer.run()
+
+    assert installer.state["removed"] is True
+    installer.stop_container.assert_called_once_with("mirage", remove=True)
+    for name in ("models", "downloads"):
+        assert (data / name / "fixture").exists() is keep_models
+    for name in ("outputs", "inputs", "thumbnails", "logs", "backups"):
+        assert (data / name / "fixture").exists() is keep_user_data
+    assert (data / "mirage.sqlite3").exists() is keep_user_data
+    assert (data / "config" / "fixture").is_file()
+    assert (data / "runtimes" / "fixture").is_file()
+
+
+def test_interactive_removal_confirms_model_and_user_data_separately(tmp_path, monkeypatch):
+    installer, data = removal_fixture(tmp_path, monkeypatch, [])
+    terminal = Mock()
+    terminal.readline.side_effect = ["yes\n", "\n", "yes\n"]
+    monkeypatch.setattr(installer_module, "installer_terminal", lambda _: nullcontext(terminal))
+
+    installer.run()
+
+    prompts = "".join(call.args[0] for call in terminal.write.call_args_list)
+    assert f"model weights and partial downloads under {data}" in prompts
+    assert f"database, job history, images, logs, and backups under {data}" in prompts
+    assert (data / "models" / "fixture").is_file()
+    assert not (data / "mirage.sqlite3").exists()
+
+
+def test_removal_recovery_reopens_database_without_stopping_other_containers(tmp_path, monkeypatch):
+    installer, data, _ = recovery_fixture(tmp_path)
+    installer.journal.update({
+        "operation": "remove",
+        "original_container": "mirage-unused",
+        "candidate_container": "mirage-candidate-unused",
+    })
+    stop = Mock()
+    monkeypatch.setattr(installer, "stop_container", stop)
+
+    installer.recover()
+
+    stop.assert_not_called()
     connection = installer_module.connect_database(data)
     assert connection.execute("SELECT active FROM maintenance").fetchone()[0] == 0
     connection.close()

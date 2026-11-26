@@ -133,7 +133,12 @@ For a development checkout, switch to the version you want and run `git submodul
 
 The update verifies the new build, backs up the database and configuration, and keeps the models, images, and other user data. If an update is interrupted, rerun the installer so it can recover before starting another operation.
 
-To uninstall a standalone installation, run the shell installer with `sh -s -- remove --yes`. From a checkout, run `./install.sh remove` and confirm the prompt. Removal deletes the application containers and launcher and retains your data directory.
+To uninstall a standalone installation, run the shell installer with `sh -s -- remove`. From a checkout, run `./install.sh remove`. After you confirm the application uninstall, Mirage asks separately whether to permanently delete each group from the data directory it shows.
+
+- **Downloaded models** includes model weights and partial downloads.
+- **User data** includes the database, job history and logs, reference images, generated images, thumbnails, and backups stored by Mirage.
+
+Press Enter at either data prompt to keep that group. For an unattended uninstall, pass `--yes --non-interactive`. Add `--purge-models` or `--purge-data` to delete the corresponding group. Settings and cached runtimes stay in the data directory for reinstalling.
 
 ## Back up and restore data
 

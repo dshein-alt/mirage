@@ -1,6 +1,8 @@
+import json
 from pathlib import Path
 from unittest.mock import patch
 
+from mirage import app_build
 from mirage.provenance import BUILD_INPUTS, container_git, source_identity
 
 
@@ -50,6 +52,31 @@ def test_container_git_mounts_the_checkout_for_submodule_provenance(tmp_path):
     assert f"{tmp_path}:/checkout:ro" in first
     assert first[-4:] == ["-C", "/checkout/stable-diffusion.cpp", "rev-parse", "HEAD"]
     assert second[second.index("-C") + 1:][:2] == ["/checkout", "status"]
+
+
+def test_app_rebuilds_after_uninstall_removed_its_cached_image(tmp_path, monkeypatch):
+    root = tmp_path / "source"
+    root.mkdir()
+    data = tmp_path / "data"
+    identity = app_build.app_identity(root, {reference: reference for reference in app_build.BASE_IMAGES})
+    manifest_path = data / "releases" / "app" / identity["app_build_id"] / "manifest.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(json.dumps({"app_image": {"id": "removed-image"}}))
+    commands = []
+    monkeypatch.setattr(app_build, "run", lambda arguments: commands.append(arguments))
+
+    def image_id(engine, reference):
+        if reference == "removed-image":
+            raise RuntimeError("image removed")
+        return reference
+
+    monkeypatch.setattr(app_build, "image_id", image_id)
+
+    manifest = app_build.build_app(root, data, "podman")
+
+    assert any(command[:2] == ["podman", "build"] for command in commands)
+    assert manifest["app_image"]["id"] != "removed-image"
+    assert json.loads(manifest_path.read_text()) == manifest
 
 
 def test_job_snapshot_contains_runtime_identity(app, registry):

@@ -21,6 +21,12 @@ import uuid
 
 APP_NAME = "mirage"
 DATABASE_NAME = "mirage.sqlite3"
+MODEL_DATA = ("models", "downloads")
+USER_DATA = (
+    "inputs", "outputs", "thumbnails", "logs", "backups",
+    DATABASE_NAME, f"{DATABASE_NAME}-wal", f"{DATABASE_NAME}-shm",
+    f"{DATABASE_NAME}-journal", f"{DATABASE_NAME}.recovery", ".active-job",
+)
 DEFAULT_RELEASE_API = "https://api.github.com/repos/dshein-alt/mirage/releases/latest"
 DEFAULT_RELEASE_REPOSITORY = "https://github.com/dshein-alt/mirage.git"
 GIT_IMAGE = "docker.io/alpine/git:v2.54.1"
@@ -279,6 +285,9 @@ class Installer:
     def container_exists(self, name):
         return subprocess.run([self.engine, "container", "inspect", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
+    def image_exists(self, image):
+        return subprocess.run([self.engine, "image", "inspect", image], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
     def container_running(self, name):
         if not self.container_exists(name):
             return False
@@ -468,7 +477,7 @@ class Installer:
         settings["server"] = {"mode": self.mode, "port": self.port}
         atomic_json(settings_path, settings)
 
-    def build(self):
+    def build(self, source_reference):
         if self.args.skip_build:
             app_image = self.state.get("app_image")
             runtime_build = self.state.get("active_runtime_build")
@@ -496,7 +505,7 @@ class Installer:
             "sd_cpp_commit": runtime["sd_cpp_commit"],
             "runtime_build": runtime["build_id"],
             "runtime_image": runtime["runtime_image"],
-            "source_reference": self.state.get("source_reference"),
+            "source_reference": source_reference,
         })
         atomic_json(manifest_path, app)
         return app["deployment_id"], app["app_image"], runtime
@@ -731,7 +740,6 @@ class Installer:
             selection = self.selected_models(terminal, dialog)
             token = self.credentials(terminal)
         source_reference = self.resolve_source()
-        self.state["source_reference"] = source_reference
         original_running = self.container_running("mirage")
         if operation == "update" and not self.container_exists("mirage"):
             raise RuntimeError("no installed Mirage container was found")
@@ -739,10 +747,14 @@ class Installer:
             raise RuntimeError("queued or running jobs prevent installation")
         self.new_journal(operation, original_running)
         try:
+            backup = self.data / "backups" / self.operation_id
+            self.intent("snapshot-config", backup_dir=str(backup))
+            shutil.copytree(self.data / "config", backup / "config")
+            self.completed("snapshot-config")
             self.intent("initialize-config")
             self.initialize_config()
             self.completed("initialize-config")
-            deployment, image, runtime = self.build()
+            deployment, image, runtime = self.build(source_reference)
             if not (self.data / "mirage.sqlite3").is_file():
                 self.intent("initialize-database")
                 self.offline_migrate(image, deployment)
@@ -763,10 +775,8 @@ class Installer:
             self.intent("verify-candidate", verification_dir=str(verification))
             self.verify_candidate(self.verifier, verification, port, deployment, image, runtime, token)
             self.completed("verify-candidate")
-            backup = self.data / "backups" / self.operation_id
             self.intent("backup", backup_dir=str(backup))
             backup_sqlite(self.data / "mirage.sqlite3", backup / "mirage.sqlite3")
-            shutil.copytree(self.data / "config", backup / "config", dirs_exist_ok=True)
             self.completed("backup")
             self.intent("migrate")
             self.offline_migrate(image, deployment)
@@ -849,46 +859,56 @@ class Installer:
         self.journal = journal
         self.operation_id = journal["operation_id"]
         self.data = Path(journal["data_dir"])
-        if journal.get("committed"):
-            leave_maintenance(self.data, self.operation_id)
+        if journal.get("committed") or journal.get("operation") == "remove":
+            if (self.data / DATABASE_NAME).is_file():
+                leave_maintenance(self.data, self.operation_id)
             self.journal_path.unlink(missing_ok=True)
             self.journal = None
             return
         for name in (journal.get("verifier_container"), journal.get("candidate_container")):
             if name:
                 self.stop_container(name, remove=True)
-        backup = journal.get("backup_dir")
-        migration_started = "migrate" in journal.get("actions", []) or journal.get("pending_action") == "migrate"
-        if migration_started and "backup" in journal.get("actions", []) and backup and Path(backup).is_dir():
+        actions = {*journal.get("actions", []), journal.get("pending_action")}
+        backup = Path(journal["backup_dir"]) if journal.get("backup_dir") else None
+        restore_database = "migrate" in actions and "backup" in journal.get("actions", [])
+        if backup and restore_database and (backup / DATABASE_NAME).is_file():
             restored = self.data / "mirage.sqlite3.recovery"
-            shutil.copy2(Path(backup) / "mirage.sqlite3", restored)
+            shutil.copy2(backup / DATABASE_NAME, restored)
             os.replace(restored, self.data / "mirage.sqlite3")
             for suffix in ("-wal", "-shm"):
                 (self.data / f"mirage.sqlite3{suffix}").unlink(missing_ok=True)
-            shutil.rmtree(self.data / "config")
-            shutil.copytree(Path(backup) / "config", self.data / "config")
-        if "activate-runtime" in journal.get("actions", []) or journal.get("pending_action") == "activate-runtime":
+        restore_config = restore_database or {"snapshot-config", "initialize-config"} <= actions
+        if backup and restore_config and (backup / "config").is_dir():
+            config = self.data / "config"
+            if config.exists():
+                shutil.rmtree(config)
+            shutil.copytree(backup / "config", config)
+        if "activate-runtime" in actions:
             current = self.data / "runtimes" / "current"
             current.unlink(missing_ok=True)
             if journal.get("original_runtime_link"):
                 current.symlink_to(journal["original_runtime_link"])
-        if journal.get("original_container") and self.container_exists("mirage"):
-            self.stop_container("mirage", remove=True)
+        candidate = journal.get("candidate_container_id")
+        if candidate and self.container_exists("mirage"):
+            current_id = self.run_engine("inspect", "--format", "{{.Id}}", "mirage", capture=True)
+            if current_id == candidate:
+                self.stop_container("mirage", remove=True)
         original = journal.get("original_container")
         if original and self.container_exists(original):
             self.run_engine("rename", original, "mirage")
-            if journal.get("original_running"):
-                self.run_engine("start", "mirage")
-                original_state = journal.get("original_state", {})
-                settings = read_json(self.data / "config" / "settings.json", {})
-                self.wait_health(
-                    settings.get("server", {}).get("port", 8765),
-                    original_state.get("deployment_id"),
-                    original_state.get("app_image", {}).get("id"),
-                    os.environ.get("MIRAGE_API_TOKEN", ""),
-                    allow_unauthorized=True,
-                )
-        leave_maintenance(self.data, self.operation_id)
+        if journal.get("original_running") and "stop-original" in actions and not self.container_running("mirage"):
+            self.run_engine("start", "mirage")
+            original_state = journal.get("original_state", {})
+            settings = read_json(self.data / "config" / "settings.json", {})
+            self.wait_health(
+                settings.get("server", {}).get("port", 8765),
+                original_state.get("deployment_id"),
+                original_state.get("app_image", {}).get("id"),
+                os.environ.get("MIRAGE_API_TOKEN", ""),
+                allow_unauthorized=True,
+            )
+        if (self.data / DATABASE_NAME).is_file():
+            leave_maintenance(self.data, self.operation_id)
         if journal.get("original_state"):
             atomic_json(self.state_path, journal["original_state"])
         else:
@@ -896,44 +916,79 @@ class Installer:
         self.journal_path.unlink(missing_ok=True)
         self.journal = None
 
+    def confirm_removal(self):
+        requested = (self.args.purge_models, self.args.purge_data)
+        if self.args.yes:
+            return requested
+        with installer_terminal(self.args.non_interactive) as terminal:
+            if terminal is None:
+                raise RuntimeError("remove requires --yes when no terminal is available")
+            answer = read_terminal(terminal, "Remove the Mirage application containers and launcher? [y/N] ")
+            if answer.lower() not in ("y", "yes"):
+                raise RuntimeError("removal cancelled")
+            questions = (
+                f"Permanently delete downloaded model weights and partial downloads under {self.data}? [y/N] ",
+                f"Permanently delete the Mirage database, job history, images, logs, and backups under {self.data}? [y/N] ",
+            )
+            return tuple(
+                (selected or not any(requested)) and read_terminal(terminal, question).lower() in ("y", "yes")
+                for selected, question in zip(requested, questions)
+            )
+
     def remove(self):
-        if not self.args.yes:
-            if self.args.non_interactive:
-                raise RuntimeError("remove requires --yes in non-interactive mode")
-            with installer_terminal(False) as terminal:
-                if terminal is None:
-                    raise RuntimeError("remove requires --yes when no terminal is available")
-                answer = read_terminal(terminal, "Remove the Mirage application stack and launcher? User data is preserved. [y/N] ")
-                if answer.lower() not in ("y", "yes"):
-                    raise RuntimeError("removal cancelled")
-        self.data = Path(self.state.get("data_dir", "")).resolve()
+        data = Path(self.state.get("data_dir", ""))
+        if not data.is_absolute() or data.resolve() != data:
+            raise RuntimeError("the recorded Mirage data directory is missing or has moved")
+        self.data = data
         self.engine = self.state.get("engine") or ("podman" if shutil.which("podman") else "docker")
         self.launcher = Path(self.state.get("launcher", Path.home() / ".local" / "bin" / "mirage"))
+        purge_models, purge_data = self.confirm_removal()
+        if (purge_models or purge_data) and self.data in (Path(self.data.anchor), Path.home().resolve()):
+            raise RuntimeError("purging requires a Mirage data directory outside the home or filesystem root itself")
         if busy_jobs(self.data):
             raise RuntimeError("queued or running jobs prevent removal")
+        if not self.state.get("removed"):
+            self.remove_application()
+        for purge, paths, description in (
+            (purge_models, MODEL_DATA, "Downloaded models"),
+            (purge_data, USER_DATA, "Database, job history, images, logs, and backups"),
+        ):
+            if purge:
+                for name in paths:
+                    path = self.data / name
+                    if not path.is_symlink() and path.is_dir():
+                        shutil.rmtree(path)
+                    else:
+                        path.unlink(missing_ok=True)
+            print(f"{description} {'deleted' if purge else 'kept'} under {self.data}")
+
+    def remove_application(self):
+        self.run_engine("info", capture=True)
         self.new_journal("remove", self.container_running("mirage"))
         try:
-            self.intent("remove-maintenance")
-            enter_maintenance(self.data, self.operation_id)
-            wait_for_writes(self.data)
-            self.completed("remove-maintenance")
+            if (self.data / DATABASE_NAME).is_file():
+                self.intent("remove-maintenance")
+                enter_maintenance(self.data, self.operation_id)
+                wait_for_writes(self.data)
+                self.completed("remove-maintenance")
             for name in ("mirage", (self.state.get("previous") or {}).get("container")):
                 if name:
                     self.stop_container(name, remove=True)
             images = {self.state.get("app_image", {}).get("id"), ((self.state.get("previous") or {}).get("app_image") or {}).get("id")}
             for image in images:
-                if image:
+                if image and self.image_exists(image):
                     self.run_engine("rmi", image)
             if self.launcher.is_symlink() and Path(os.readlink(self.launcher)) == Path(self.state.get("launcher_target", "")):
                 self.launcher.unlink()
             self.journal["committed"] = True
             self.save_journal()
-            leave_maintenance(self.data, self.operation_id)
+            if (self.data / DATABASE_NAME).is_file():
+                leave_maintenance(self.data, self.operation_id)
             self.state.update({"removed": True, "container": None, "previous": None})
             atomic_json(self.state_path, self.state)
             self.journal_path.unlink(missing_ok=True)
             self.journal = None
-            print(f"Mirage application removed; user data preserved at {self.data}")
+            print("Mirage application removed")
         except BaseException:
             self.recover()
             raise
@@ -945,6 +1000,8 @@ class Installer:
                 self.engine = self.state.get("engine") or ("podman" if shutil.which("podman") else "docker")
                 self.recover()
             operation = self.args.operation
+            if operation != "remove" and (self.args.purge_models or self.args.purge_data):
+                raise RuntimeError("--purge-models and --purge-data require the remove operation")
             if operation == "remove":
                 if not self.state:
                     raise RuntimeError("no Mirage installation state was found")
@@ -971,6 +1028,8 @@ def parser():
     result.add_argument("--non-interactive", action="store_true")
     result.add_argument("--allow-no-gpu", action="store_true")
     result.add_argument("--yes", action="store_true")
+    result.add_argument("--purge-models", action="store_true", help="remove downloaded model weights and partial downloads")
+    result.add_argument("--purge-data", action="store_true", help="remove the database, job history, images, logs, and backups")
     result.add_argument("--standalone", action="store_true")
     result.add_argument("--source-dir")
     result.add_argument("--release-api")
