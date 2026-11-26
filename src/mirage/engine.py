@@ -31,6 +31,12 @@ LINE_OUTPUT_ENTRYPOINT = [
 ]
 
 
+def nvidia_device_requests(engine):
+    if engine == "podman":
+        return [{"Driver": "cdi", "DeviceIDs": ["nvidia.com/gpu=all"]}]
+    return [{"Driver": "nvidia", "Count": -1, "Capabilities": [["gpu"]]}]
+
+
 class UnixHTTPConnection(http.client.HTTPConnection):
     def __init__(self, socket_path, timeout=60):
         super().__init__("localhost", timeout=timeout)
@@ -120,7 +126,7 @@ class EngineClient:
         if b'"error"' in payload:
             raise WorkbenchError("runtime_image_build_failed", payload.decode("utf-8", "replace")[-4000:], 500)
 
-    def create(self, name, image, command, binds, devices=(), environment=None, workdir="/output", *, line_output=False):
+    def create(self, name, image, command, binds, devices=(), environment=None, workdir="/output", device_requests=(), *, line_output=False):
         host_config = {
             "Binds": binds,
             "AutoRemove": False,
@@ -129,10 +135,13 @@ class EngineClient:
                 {"PathOnHost": str(device), "PathInContainer": str(device), "CgroupPermissions": "rwm"}
                 for device in devices
             ],
+            "DeviceRequests": list(device_requests),
         }
         if self.engine == "podman":
             host_config["GroupAdd"] = [value for value in os.environ.get("MIRAGE_HOST_GROUPS", "").split(",") if value]
             host_config["UsernsMode"] = "keep-id"
+            if device_requests:
+                host_config["SecurityOpt"] = ["label=disable"]
         body = {
             "Image": image,
             "Entrypoint": LINE_OUTPUT_ENTRYPOINT if line_output else ["/usr/local/bin/sd-cli"],

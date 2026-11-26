@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from mirage.engine import EngineClient, LINE_OUTPUT_ENTRYPOINT
+from mirage.engine import EngineClient, LINE_OUTPUT_ENTRYPOINT, nvidia_device_requests
 
 
 @pytest.mark.skipif(not shutil.which("perl") or not shutil.which("bash"), reason="requires the runtime's shell utilities")
@@ -58,6 +58,22 @@ def test_podman_containers_use_host_identity_and_keep_id(monkeypatch):
     assert captured["User"] == "1000:1001"
     assert captured["HostConfig"]["UsernsMode"] == "keep-id"
     assert captured["HostConfig"]["GroupAdd"] == ["1001", "992"]
+
+
+@pytest.mark.parametrize("engine,expected", [
+    ("docker", [{"Driver": "nvidia", "Count": -1, "Capabilities": [["gpu"]]}]),
+    ("podman", [{"Driver": "cdi", "DeviceIDs": ["nvidia.com/gpu=all"]}]),
+])
+def test_nvidia_device_requests(monkeypatch, engine, expected):
+    client = EngineClient(engine=engine)
+    captured = {}
+    client.request = lambda method, path, body=None, **kwargs: captured.update(body) or {"Id": "container-id"}
+
+    assert client.create("job", "image", [], [], device_requests=nvidia_device_requests(engine)) == "container-id"
+
+    assert captured["HostConfig"]["DeviceRequests"] == expected
+    if engine == "podman":
+        assert captured["HostConfig"]["SecurityOpt"] == ["label=disable"]
 
 
 def test_offline_podman_migration_uses_keep_id(tmp_path):

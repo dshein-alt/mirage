@@ -6,7 +6,9 @@ import subprocess
 
 BUILD_INPUTS = (
     "docker/Dockerfile.builder",
+    "docker/Dockerfile.builder.cuda",
     "docker/Dockerfile.runtime",
+    "docker/Dockerfile.runtime.cuda",
     "docker/export-runtime.sh",
 )
 IGNORED_DIRECTORIES = {".git", "build", "__pycache__", ".pytest_cache"}

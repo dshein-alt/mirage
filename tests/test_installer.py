@@ -37,6 +37,68 @@ def test_default_operation_and_option_precedence(tmp_path, monkeypatch):
     assert installer.option("data_dir", "MIRAGE_DATA_DIR", "data_dir", "/default") == "/explicit"
 
 
+@pytest.mark.parametrize("detected,expected", [("cuda", "cuda"), ("vulkan", "vulkan"), (None, "vulkan")])
+def test_backend_auto_detection(tmp_path, monkeypatch, detected, expected):
+    monkeypatch.setattr(installer_module, "detect_gpu_backend", lambda: detected)
+    monkeypatch.setattr(installer_module.shutil, "which", lambda name: f"/usr/bin/{name}")
+    installer = make_installer(tmp_path, ["--runtime", "podman", "--allow-no-gpu"])
+
+    installer.resolve_options()
+
+    assert installer.backend == expected
+
+
+def test_backend_explicit_and_saved_options_override_detection(tmp_path, monkeypatch):
+    monkeypatch.setattr(installer_module, "detect_gpu_backend", lambda: "cuda")
+    monkeypatch.setattr(installer_module.shutil, "which", lambda name: f"/usr/bin/{name}")
+    explicit = make_installer(tmp_path, ["--runtime", "podman", "--allow-no-gpu", "--backend", "vulkan"])
+    explicit.resolve_options()
+    assert explicit.backend == "vulkan"
+
+    saved = make_installer(tmp_path, ["--runtime", "podman", "--allow-no-gpu"])
+    saved.state = {"backend": "cuda"}
+    saved.resolve_options()
+    assert saved.backend == "cuda"
+
+
+def test_hardware_detection_prefers_nvidia_cuda(monkeypatch):
+    monkeypatch.setattr(installer_module, "nvidia_hardware_present", lambda: True)
+    assert installer_module.detect_gpu_backend() == "cuda"
+
+
+def test_cuda_requires_container_toolkit(tmp_path, monkeypatch):
+    monkeypatch.setattr(installer_module, "detect_gpu_backend", lambda: "cuda")
+    monkeypatch.setattr(installer_module, "nvidia_hardware_present", lambda: True)
+    monkeypatch.setattr(installer_module.shutil, "which", lambda name: "/usr/bin/podman" if name == "podman" else None)
+    installer = make_installer(tmp_path, ["--runtime", "podman", "--backend", "cuda"])
+
+    with pytest.raises(RuntimeError, match="NVIDIA Container Toolkit"):
+        installer.resolve_options()
+
+
+def test_cuda_install_configures_cuda_profiles_and_removes_mesa_filter(tmp_path):
+    installer = make_installer(tmp_path)
+    installer.source = ROOT
+    installer.data = tmp_path / "data"
+    installer.backend = "cuda"
+    installer.mode = "local"
+    installer.port = 8765
+    installer.state = {"backend": "vulkan"}
+    config = installer.data / "config"
+    config.mkdir(parents=True)
+    shutil.copy2(ROOT / "config" / "settings.default.json", config / "settings.json")
+    settings = json.loads((config / "settings.json").read_text())
+    del settings["backend_profiles"]["cuda-balanced"]
+    (config / "settings.json").write_text(json.dumps(settings))
+
+    installer.initialize_config()
+
+    configured = json.loads((config / "settings.json").read_text())
+    assert configured["backend_profiles"]["cuda-balanced"]["backend"].endswith("diffusion=cuda0,vae=cuda0")
+    assert all(model["backend_profile"] == "cuda-balanced" for model in configured["models"].values())
+    assert "MESA_VK_DEVICE_SELECT" not in configured["environment"]
+
+
 def test_standalone_install_uses_standard_data_directory_after_checkout_moves(tmp_path, monkeypatch):
     checkout = tmp_path / "old-checkout"
     previous_data = checkout / "data"

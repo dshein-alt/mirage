@@ -1,6 +1,6 @@
 # Acceptance checklist
 
-This checklist distinguishes automated, non-GPU checks from checks that require the full local model set and Radeon/Vulkan hardware. No timing or perceptual-quality claim is inferred from the original proof-of-concept runs.
+This checklist distinguishes automated, non-GPU checks from checks that require the full local model set and target GPU hardware. The original proof-of-concept runs used Radeon/Vulkan; NVIDIA/CUDA requires separate target-host validation. No timing or perceptual-quality claim is inferred from the original proof-of-concept runs.
 
 | Scenario | Verification |
 |---|---|
@@ -43,6 +43,7 @@ This checklist distinguishes automated, non-GPU checks from checks that require 
 | Installer source selection and recovery journal | `tests/test_installer.py`; concurrent installers and injected verifier/interruption failures |
 | Install, update, remove without model downloads | Docker and Podman target-host runs; verify persistent data survives removal |
 | Real MOSS, Qwen, Z-Image generation | Optional hardware smoke runs using already installed models; inspect logs and outputs |
+| NVIDIA/CUDA installation and generation | On an NVIDIA host, verify automatic CUDA selection, `mirage runtime verify --devices`, all three models, Qwen editing, cancellation, and service restart; inspect logs for `cuda0` and valid outputs |
 
 ## Commands
 

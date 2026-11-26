@@ -9,6 +9,13 @@ export_dir=${1:-/export}
 mkdir -p "$export_dir/bin"
 cp -a /sd.cpp/build/bin/. "$export_dir/bin/"
 
+if [ "${MIRAGE_RUNTIME_BACKEND:-vulkan}" = cuda ] && [ -f /usr/local/cuda/lib64/stubs/libcuda.so ]; then
+    mkdir -p /tmp/mirage-cuda-stubs
+    ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /tmp/mirage-cuda-stubs/libcuda.so.1
+    LD_LIBRARY_PATH=/tmp/mirage-cuda-stubs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+    export LD_LIBRARY_PATH
+fi
+
 for binary in "$export_dir"/bin/*; do
     [ -f "$binary" ] || continue
     if ldd "$binary" 2>/dev/null | grep 'not found' >&2; then
@@ -39,15 +46,16 @@ for path in sorted((root / "bin").rglob("*")):
 version = subprocess.run(
     [str(root / "bin/sd-cli"), "--help"], text=True,
     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=True,
-    env={**os.environ, "LD_LIBRARY_PATH": str(root / "bin")}
+    env={**os.environ, "LD_LIBRARY_PATH": str(root / "bin") + (":" + os.environ["LD_LIBRARY_PATH"] if os.environ.get("LD_LIBRARY_PATH") else "")}
 ).stdout.splitlines()[0]
 manifest = {
     "schema_version": 1,
     "revision": os.environ["SD_REVISION"],
     "version": version,
     "arch": platform.machine(),
-    "builder_base": "ubuntu:24.04",
-    "runtime_base": "ubuntu:24.04",
+    "backend": os.environ.get("MIRAGE_RUNTIME_BACKEND", "vulkan"),
+    "builder_base": os.environ.get("BUILDER_BASE", "ubuntu:24.04"),
+    "runtime_base": os.environ.get("RUNTIME_BASE", "ubuntu:24.04"),
     "cmake_flags": os.environ["CMAKE_FLAGS"],
     "files": files,
 }

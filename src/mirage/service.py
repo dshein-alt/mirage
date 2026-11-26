@@ -75,6 +75,7 @@ class Application:
             "runtime_build": manifest["build_id"],
             "runtime_image_id": manifest["runtime_image"]["id"],
             "runtime_image_reference": manifest["runtime_image"]["reference"],
+            "runtime_backend": manifest.get("backend", "vulkan"),
         })
         model_settings = self.settings["models"][model]
         profile_name = model_settings["backend_profile"]

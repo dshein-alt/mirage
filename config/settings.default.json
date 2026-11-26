@@ -12,6 +12,10 @@
     "vulkan-balanced": {
       "backend": "te=cpu,clip_vision=cpu,diffusion=vulkan0,vae=vulkan0",
       "extra_args": ["--offload-to-cpu"]
+    },
+    "cuda-balanced": {
+      "backend": "te=cpu,clip_vision=cpu,diffusion=cuda0,vae=cuda0",
+      "extra_args": ["--offload-to-cpu"]
     }
   },
   "models": {

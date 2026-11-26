@@ -11,6 +11,23 @@ from .provenance import container_git, source_identity, write_json
 from .util import file_sha256, read_json
 
 
+RUNTIME_BACKENDS = {
+    "vulkan": {
+        "builder": "docker/Dockerfile.builder",
+        "runtime": "docker/Dockerfile.runtime",
+        "base_images": ("ubuntu:24.04",),
+    },
+    "cuda": {
+        "builder": "docker/Dockerfile.builder.cuda",
+        "runtime": "docker/Dockerfile.runtime.cuda",
+        "base_images": (
+            "docker.io/nvidia/cuda:12.8.1-devel-ubuntu24.04",
+            "docker.io/nvidia/cuda:12.8.1-runtime-ubuntu24.04",
+        ),
+    },
+}
+
+
 def run(arguments, capture=False):
     result = subprocess.run(
         [str(value) for value in arguments], text=True,
@@ -36,14 +53,26 @@ def verify_files(root, manifest):
             raise RuntimeError(f"runtime artifact checksum mismatch: {relative}")
 
 
-def build_runtime(root, data, engine, revision=None, activate=False, *, git_command=None):
+def current_runtime_backend(data):
+    manifest = data / "runtimes" / "current" / "manifest.json"
+    return read_json(manifest).get("backend", "vulkan") if manifest.is_file() else None
+
+
+def build_runtime(root, data, engine, revision=None, activate=False, *, backend="vulkan", git_command=None):
     root = Path(root).resolve()
     data = Path(data).resolve()
+    if backend not in RUNTIME_BACKENDS:
+        raise RuntimeError(f"unsupported runtime backend: {backend}")
+    if activate and current_runtime_backend(data) not in (None, backend):
+        raise RuntimeError("use the installer to switch GPU backends")
+    selection = RUNTIME_BACKENDS[backend]
     if not (root / "stable-diffusion.cpp" / "ggml" / "src").is_dir():
         raise RuntimeError("source submodules are missing; run: git submodule update --init --recursive")
-    run([engine, "pull", "ubuntu:24.04"])
-    base_id = image_id(engine, "ubuntu:24.04")
-    identity = source_identity(root, {"ubuntu:24.04": base_id}, git_command=git_command)
+    base_images = {}
+    for base in selection["base_images"]:
+        run([engine, "pull", base])
+        base_images[base] = image_id(engine, base)
+    identity = source_identity(root, {**base_images, "mirage_backend": backend}, git_command=git_command)
     if revision and identity["sd_cpp_commit"] != revision:
         raise RuntimeError(f"source is at {identity['sd_cpp_commit']}, requested {revision}")
     build_id = identity["build_id"]
@@ -72,7 +101,7 @@ def build_runtime(root, data, engine, revision=None, activate=False, *, git_comm
             staging.mkdir()
             builder = f"localhost/mirage-builder:{build_id}"
             run([
-                engine, "build", "--pull", "-f", root / "docker" / "Dockerfile.builder",
+                engine, "build", "--pull", "-f", root / selection["builder"],
                 "--build-arg", f"SD_REVISION={identity['sd_cpp_commit']}", "-t", builder, root,
             ])
             run([engine, "run", "--rm", "-v", f"{staging}:/export:rw", builder, "/export"])
@@ -88,16 +117,23 @@ def build_runtime(root, data, engine, revision=None, activate=False, *, git_comm
             except RuntimeError:
                 immutable = None
         if not immutable:
-            run([engine, "build", "-f", root / "docker" / "Dockerfile.runtime", "-t", reference, root])
+            run([engine, "build", "-f", root / selection["runtime"], "-t", reference, root])
             immutable = image_id(engine, reference)
         artifact_root = release if release.exists() else staging
+        gpu_arguments = []
+        if backend == "cuda":
+            gpu_arguments = (
+                ["--device", "nvidia.com/gpu=all", "--security-opt", "label=disable"]
+                if engine == "podman" else ["--gpus", "all"]
+            )
         run([
-            engine, "run", "--rm", "--entrypoint", "/bin/sh",
+            engine, "run", "--rm", *gpu_arguments, "--entrypoint", "/bin/sh",
             "-v", f"{artifact_root}:/opt/sd:ro", immutable, "-c",
-            "export LD_LIBRARY_PATH=/opt/sd/bin; ! ldd /opt/sd/bin/sd-cli 2>/dev/null | grep 'not found'; /opt/sd/bin/sd-cli --help >/dev/null",
+            "export LD_LIBRARY_PATH=/opt/sd/bin; ! ldd /opt/sd/bin/sd-cli 2>/dev/null | grep 'not found' && /opt/sd/bin/sd-cli --help >/dev/null",
         ])
         manifest.update({
             "schema_version": 2,
+            "backend": backend,
             "revision": identity["sd_cpp_commit"],
             **identity,
             "runtime_image": {"reference": reference, "id": immutable},
@@ -107,6 +143,8 @@ def build_runtime(root, data, engine, revision=None, activate=False, *, git_comm
         if not release.exists():
             os.replace(staging, release)
         if activate:
+            if current_runtime_backend(data) not in (None, backend):
+                raise RuntimeError("use the installer to switch GPU backends")
             current = data / "runtimes" / "current"
             previous = os.readlink(current) if current.is_symlink() else None
             temporary = data / "runtimes" / "current.new"
@@ -130,11 +168,13 @@ def main():
     parser.add_argument("engine", choices=("podman", "docker"))
     parser.add_argument("revision", nargs="?")
     parser.add_argument("--activate", action="store_true")
+    parser.add_argument("--backend", choices=tuple(RUNTIME_BACKENDS))
     parser.add_argument("--container-git", action="store_true")
     args = parser.parse_args()
     try:
         git_command = container_git(args.root, args.engine) if args.container_git else None
-        build_runtime(args.root, args.data, args.engine, args.revision, args.activate, git_command=git_command)
+        backend = args.backend or current_runtime_backend(args.data) or "vulkan"
+        build_runtime(args.root, args.data, args.engine, args.revision, args.activate, backend=backend, git_command=git_command)
     except (OSError, RuntimeError, ValueError) as error:
         print(f"mirage: {error}", file=sys.stderr)
         return 1

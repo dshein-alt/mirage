@@ -82,6 +82,42 @@ def test_qwen_edit_uses_projector_and_cpu_vulkan_split(app, registry):
     assert f"/inputs/{reference['filename']}" in command
 
 
+def test_cuda_job_requests_nvidia_gpu_without_dri_devices(app, registry, monkeypatch):
+    install_sparse(registry, "zimage")
+    monkeypatch.delenv("MIRAGE_DRI_DEVICES", raising=False)
+    monkeypatch.delenv("MIRAGE_ALLOW_NO_GPU", raising=False)
+    job = app.submit_generation({"prompt": "CUDA", "model": "zimage"})
+    job["resolved"]["runtime_backend"] = "cuda"
+    release_bin = app.paths.data / "runtimes" / "releases" / job["resolved"]["runtime_build"] / "bin"
+    release_bin.mkdir(parents=True)
+    (release_bin / "sd-cli").touch()
+    captured = {}
+
+    class NvidiaEngine:
+        engine = "docker"
+
+        def require_runtime_image(self, image):
+            pass
+
+        def create(self, *args, **kwargs):
+            captured.update(kwargs)
+            captured["devices"] = args[4]
+            return "nvidia-container"
+
+        def start(self, container):
+            raise RuntimeError("stop after container creation")
+
+        def remove(self, container, force=False):
+            pass
+
+    app.runner.engine = NvidiaEngine()
+    with pytest.raises(RuntimeError, match="stop after"):
+        app.runner.run_container(job, [], StringIO(), threading.Event())
+
+    assert captured["devices"] == []
+    assert captured["device_requests"] == [{"Driver": "nvidia", "Count": -1, "Capabilities": [["gpu"]]}]
+
+
 def test_reference_rejected_for_non_edit_model(app, registry):
     install_sparse(registry, "zimage")
     buffer = BytesIO()

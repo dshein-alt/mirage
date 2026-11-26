@@ -39,6 +39,7 @@ for value in (
     state.get("server", {}).get("port", 8765),
     state.get("server", {}).get("mode", "local"),
     state.get("source_reference", {}).get("kind", ""),
+    state.get("backend", ""),
 ):
     print(value)
 PY
@@ -155,6 +156,9 @@ case "${1:-}" in
         if [[ "${2:-}" == build || "${2:-}" == repair ]]; then
             shift 2
             export MIRAGE_DATA_DIR="$DATA"
+            if [[ -n "${STATE_VALUES[7]:-}" ]]; then
+                set -- --backend "${STATE_VALUES[7]}" "$@"
+            fi
             if [[ "${STATE_VALUES[6]:-}" == release || "${STATE_VALUES[6]:-}" == head ]]; then
                 set -- "$@" --container-git
             fi

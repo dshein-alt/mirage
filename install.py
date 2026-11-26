@@ -49,6 +49,18 @@ def user_directory(variable, default):
     return (path if path.is_absolute() else Path.home() / default).resolve()
 
 
+def nvidia_hardware_present():
+    return Path("/dev/nvidiactl").exists() and any(Path("/dev").glob("nvidia[0-9]*"))
+
+
+def detect_gpu_backend():
+    if nvidia_hardware_present():
+        return "cuda"
+    if list(Path("/dev/dri").glob("renderD*")):
+        return "vulkan"
+    return None
+
+
 @contextmanager
 def installer_terminal(non_interactive):
     if non_interactive:
@@ -249,6 +261,7 @@ class Installer:
         self.source = None
         self.data = None
         self.engine = None
+        self.backend = self.state.get("backend", "vulkan")
         self.prefix = None
         self.operation_id = uuid.uuid4().hex[:12]
         self.candidate = f"mirage-candidate-{self.operation_id}"
@@ -506,21 +519,48 @@ class Installer:
         if engine not in ("podman", "docker") or not shutil.which(engine):
             raise RuntimeError("Podman or Docker is required")
         self.engine = engine
+        requested_backend = self.option("backend", "MIRAGE_BACKEND", "backend", "auto")
+        if requested_backend not in ("auto", "cuda", "vulkan"):
+            raise RuntimeError("backend must be auto, cuda, or vulkan")
+        detected_backend = detect_gpu_backend()
+        self.backend = detected_backend if requested_backend == "auto" else requested_backend
+        if self.backend is None:
+            if not self.args.allow_no_gpu:
+                raise RuntimeError("no NVIDIA GPU or DRI render device found; use --allow-no-gpu for a CPU/custom backend")
+            self.backend = "vulkan"
+        if requested_backend == "auto":
+            print(f"GPU backend: {self.backend}" + (" (automatically detected)" if detected_backend else " (CPU/custom fallback)"))
+        if not self.args.allow_no_gpu:
+            if self.backend == "cuda" and not nvidia_hardware_present():
+                raise RuntimeError("CUDA requires an NVIDIA driver with /dev/nvidiactl and at least one /dev/nvidiaN device")
+            if self.backend == "cuda" and not shutil.which("nvidia-ctk"):
+                raise RuntimeError("CUDA requires NVIDIA Container Toolkit (nvidia-ctk); install and configure it for the selected container engine")
+            if self.backend == "vulkan" and not list(Path("/dev/dri").glob("renderD*")):
+                raise RuntimeError("Vulkan requires a DRI render device; use --allow-no-gpu for a CPU/custom backend")
         self.data.mkdir(parents=True, exist_ok=True)
         for name in ("config", "models", "downloads", "inputs", "outputs", "thumbnails", "logs", "runtimes", "backups"):
             (self.data / name).mkdir(parents=True, exist_ok=True)
-        if not self.args.allow_no_gpu and not list(Path("/dev/dri").glob("renderD*")):
-            raise RuntimeError("no DRI render device found; use --allow-no-gpu for a CPU/custom backend")
         if shutil.disk_usage(self.data).free < 8_000_000_000:
             raise RuntimeError("at least 8 GB free space is required")
 
     def initialize_config(self):
+        settings_path = self.data / "config" / "settings.json"
+        fresh_settings = self.replace_settings or not settings_path.exists()
         for name in ("generation-presets", "settings"):
             destination = self.data / "config" / f"{name}.json"
             if self.replace_settings or not destination.exists():
                 shutil.copy2(self.source / "config" / f"{name}.default.json", destination)
-        settings_path = self.data / "config" / "settings.json"
         settings = read_json(settings_path)
+        previous_backend = self.state.get("backend", "vulkan")
+        if self.backend == "cuda" and (fresh_settings or previous_backend != "cuda"):
+            defaults = read_json(self.source / "config" / "settings.default.json")
+            settings["backend_profiles"]["cuda-balanced"] = defaults["backend_profiles"]["cuda-balanced"]
+            for model in settings["models"].values():
+                model["backend_profile"] = "cuda-balanced"
+            settings.get("environment", {}).pop("MESA_VK_DEVICE_SELECT", None)
+        elif self.backend == "vulkan" and not fresh_settings and previous_backend == "cuda":
+            for model in settings["models"].values():
+                model["backend_profile"] = "vulkan-balanced"
         settings["server"] = {"mode": self.mode, "port": self.port}
         atomic_json(settings_path, settings)
 
@@ -533,6 +573,8 @@ class Installer:
             runtime = read_json(self.data / "runtimes" / "releases" / runtime_build / "manifest.json")
             if not runtime:
                 raise RuntimeError("the recorded runtime release is missing")
+            if runtime.get("backend", "vulkan") != self.backend:
+                raise RuntimeError(f"--skip-build cannot switch from {runtime.get('backend', 'vulkan')} to {self.backend}")
             return self.state["deployment_id"], app_image, runtime
         sys.path.insert(0, str(self.source / "src"))
         try:
@@ -544,7 +586,7 @@ class Installer:
 
                 build_options["git_command"] = container_git(self.source, self.engine, image=GIT_IMAGE)
             app = build_app(self.source, self.data, self.engine, **build_options)
-            runtime = build_runtime(self.source, self.data, self.engine, **build_options)
+            runtime = build_runtime(self.source, self.data, self.engine, backend=self.backend, **build_options)
         finally:
             sys.path.pop(0)
         manifest_path = self.data / "releases" / "app" / app["app_build_id"] / "manifest.json"
@@ -673,7 +715,7 @@ class Installer:
             status = self.http(port, "/api/v1/runtime", token=token)
             if status.get("build_id") != runtime["build_id"] or status.get("runtime_image", {}).get("id") != runtime["runtime_image"]["id"]:
                 raise RuntimeError("candidate runtime build or immutable image identity mismatch")
-            verified = self.http(port, "/api/v1/runtime/verify", method="POST", token=token)
+            verified = self.http(port, "/api/v1/runtime/verify?devices=true", method="POST", token=token)
             if verified.get("build_id") != runtime["build_id"] or verified.get("runtime_image", {}).get("id") != runtime["runtime_image"]["id"]:
                 raise RuntimeError("runtime verification returned a different identity")
         finally:
@@ -939,6 +981,7 @@ class Installer:
                 "schema_version": 1,
                 "data_dir": str(self.data),
                 "engine": self.engine,
+                "backend": self.backend,
                 "prefix": str(self.prefix),
                 "launcher": str(launcher_links[0]),
                 "launcher_links": [str(path) for path in launcher_links],
@@ -1178,6 +1221,7 @@ def parser():
     result.add_argument("--mode", choices=("local", "authenticated"))
     result.add_argument("--models")
     result.add_argument("--import-models")
+    result.add_argument("--backend", choices=("auto", "cuda", "vulkan"), default=None, help="GPU backend; auto prefers NVIDIA CUDA and otherwise uses Vulkan")
     result.add_argument("--runtime", dest="engine", choices=("podman", "docker"))
     result.add_argument("--skip-build", action="store_true")
     result.add_argument("--skip-models", action="store_true")

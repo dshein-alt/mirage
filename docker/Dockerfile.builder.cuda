@@ -1,0 +1,44 @@
+ARG CUDA_VERSION=12.8.1
+ARG UBUNTU_VERSION=24.04
+FROM docker.io/nvidia/cuda:${CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION}
+
+ARG CUDA_VERSION
+ARG UBUNTU_VERSION
+ARG DEBIAN_FRONTEND=noninteractive
+ARG SD_REVISION=52491bd9f1fc15281791723bdff13baab7fd6819
+ARG CUDA_ARCHITECTURES="61;70;75;80;86;89;90;100;120"
+ENV SD_REVISION=$SD_REVISION
+ENV MIRAGE_RUNTIME_BACKEND=cuda
+ENV BUILDER_BASE=docker.io/nvidia/cuda:${CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION}
+ENV RUNTIME_BASE=docker.io/nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION}
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake git ca-certificates curl gnupg python3 binutils && \
+    mkdir -p /etc/apt/keyrings && \
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /tmp/nodesource-repo.gpg.key && \
+    gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg /tmp/nodesource-repo.gpg.key && \
+    rm /tmp/nodesource-repo.gpg.key && \
+    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_24.x nodistro main" > /etc/apt/sources.list.d/nodesource.list && \
+    apt-get update && apt-get install -y --no-install-recommends nodejs && \
+    npm install -g pnpm@10.15.1 && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /sd.cpp
+COPY stable-diffusion.cpp/ .
+
+ENV CMAKE_FLAGS="-DSD_CUDA=ON -DSD_BUILD_SHARED_LIBS=ON -DGGML_NATIVE=OFF -DSD_BUILD_SHARED_GGML_LIB=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_CUDA_FA_ALL_QUANTS=ON -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_RPATH=\$ORIGIN"
+RUN cmake . -B ./build \
+    -DSD_CUDA=ON \
+    -DSD_BUILD_SHARED_LIBS=ON \
+    -DGGML_NATIVE=OFF \
+    -DSD_BUILD_SHARED_GGML_LIB=ON \
+    -DGGML_BACKEND_DL=ON \
+    -DGGML_CPU_ALL_VARIANTS=ON \
+    -DGGML_CUDA_FA_ALL_QUANTS=ON \
+    -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCHITECTURES" \
+    -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+    -DCMAKE_INSTALL_RPATH='$ORIGIN' && \
+    cmake --build ./build --config Release -j$(nproc)
+
+COPY docker/export-runtime.sh /opt/export-runtime.sh
+RUN chmod 0755 /opt/export-runtime.sh
+ENTRYPOINT ["/opt/export-runtime.sh"]

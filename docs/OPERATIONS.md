@@ -31,6 +31,29 @@ curl -fsSL https://raw.githubusercontent.com/dshein-alt/mirage/master/install.sh
 
 The data directory follows `XDG_DATA_HOME` when no separate data directory is set. Model weights live in its `models/` subdirectory. To build from a development checkout, initialize its submodules and run `./install.sh` from the checkout. The installed data uses the same default location.
 
+### GPU backend selection
+
+The default `--backend auto` prefers CUDA when the NVIDIA driver exposes `/dev/nvidiactl` and at least one `/dev/nvidiaN` device. Otherwise, it selects Vulkan when a `/dev/dri/renderD*` device is available. Existing installations reuse the saved backend. Override either behavior with `--backend cuda`, `--backend vulkan`, or the `MIRAGE_BACKEND` environment variable.
+
+CUDA and Vulkan use separate content-addressed runtime builds. The installer selects the matching `cuda-balanced` or `vulkan-balanced` model profile when creating a setup or switching backends, and verifies that the runtime container can see its devices before activation.
+
+### NVIDIA CUDA setup
+
+Install an NVIDIA driver and confirm that `nvidia-smi` works on the host. Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html); the host driver is not bundled into Mirage’s runtime image.
+
+For Docker, configure and restart Docker according to the toolkit guide, normally with `sudo nvidia-ctk runtime configure --runtime=docker` followed by a Docker service restart. Mirage requests all NVIDIA GPUs through Docker’s device-request API.
+
+For Podman, use Podman 5.4.2 or newer and the toolkit’s [CDI support](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/cdi-support.html). `nvidia-ctk cdi list` must report `nvidia.com/gpu=all`; recent toolkit versions generate this specification automatically. Mirage requests that CDI device for CUDA jobs and runtime verification.
+
+Then install or switch an existing setup explicitly:
+
+```sh
+./install.sh --backend cuda
+./install.sh update --backend cuda --non-interactive --skip-models
+```
+
+The CUDA build targets NVIDIA compute capabilities 61, 70, 75, 80, 86, 89, 90, 100, and 120. NVIDIA hardware inference is not covered by the automated non-GPU test suite; run the [acceptance checks](ACCEPTANCE.md) on the target host.
+
 ### Interactive setup
 
 When Mirage finds a saved setup, choose **reuse** to keep its settings and data location or **replace** to start with defaults. If the data location changes, old models, images, and job history stay at their previous location. Explicit options still apply. Use `--non-interactive --replace-settings` to replace the saved setup without prompts.
@@ -125,10 +148,10 @@ For Compose, set `MIRAGE_APP_IMAGE` to the built application image ID or unique 
 | The browser cannot connect | Use the port printed by the installer. Run `mirage start` and check `mirage logs`. |
 | The installer cannot find the engine socket | For rootless Podman with systemd, run `systemctl --user enable --now podman.socket`. For Docker, check that the daemon is running and your user can access its socket. |
 | A model is missing from your installation | Check **Models** or run `mirage models list`. Install the model and wait for the download job to finish before submitting a prompt. For Qwen editing, include its optional component. |
-| Mirage cannot use the GPU | Check that your user can access a render device under `/dev/dri`. With Mirage running, use `mirage runtime verify --devices` to check device visibility in the runtime. |
+| Mirage cannot use the GPU | For Vulkan, check access to a render device under `/dev/dri`. For CUDA, check `nvidia-smi`, NVIDIA Container Toolkit configuration, and Podman CDI devices where applicable. With Mirage running, use `mirage runtime verify --devices` to check device visibility in the runtime. |
 | The runtime image is missing | Run `mirage runtime repair` to recreate it from a verified runtime release when available. |
 
-Use `mirage runtime status` to see the active release and `mirage runtime rollback` to switch back to the previous release when no generation jobs are active.
+Use `mirage runtime status` to see the active release. When no generation jobs are active, `mirage runtime rollback` can restore a previous release on the same GPU backend. Use the installer to switch GPU backends.
 
 ## Update or remove Mirage
 

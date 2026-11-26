@@ -17,6 +17,7 @@ def test_pinned_source_revision():
     revision = registry["minimum_sd_revision"]
     assert settings["runtime"]["minimum_sd_revision"] == revision
     assert f"ARG SD_REVISION={revision}" in (ROOT / "docker/Dockerfile.builder").read_text()
+    assert f"ARG SD_REVISION={revision}" in (ROOT / "docker/Dockerfile.builder.cuda").read_text()
 
     source = ROOT / "stable-diffusion.cpp"
     if (source / ".git").exists():

@@ -1,7 +1,8 @@
 import os
 from pathlib import Path
+import re
 
-from .engine import EngineClient
+from .engine import EngineClient, nvidia_device_requests
 from .errors import WorkbenchError
 from .util import file_sha256, read_json
 
@@ -40,6 +41,7 @@ class RuntimeManager:
             "revision": None,
             "sd_cpp_commit": None,
             "build_id": None,
+            "backend": None,
             "runtime_image": None,
             "previous": None,
             "manifest": None,
@@ -57,6 +59,7 @@ class RuntimeManager:
                 "revision": manifest["revision"],
                 "sd_cpp_commit": manifest.get("sd_cpp_commit", manifest["revision"]),
                 "build_id": build_id,
+                "backend": manifest.get("backend", "vulkan"),
                 "runtime_image": self.image_identity(manifest),
                 "active": (current / "bin" / "sd-cli").is_file() and (current / "bin" / "sd-server").is_file(),
             })
@@ -90,6 +93,8 @@ class RuntimeManager:
         self.engine.require_runtime_image(image)
         args = ["--list-devices"] if devices else ["--help"]
         output = self.run_short(args, devices=devices, revision=revision, image=image)
+        if devices and manifest.get("backend") == "cuda" and not re.search(r"^CUDA\d+\t", output, re.MULTILINE):
+            raise WorkbenchError("gpu_unavailable", "The runtime did not enumerate a CUDA device. Check the NVIDIA driver and container toolkit", 503)
         return {
             "verified": True,
             "revision": manifest["revision"],
@@ -105,13 +110,15 @@ class RuntimeManager:
         build_id = self.build_id(manifest)
         image = image or self.image_identity(manifest)["id"]
         name = f"mirage-verify-{build_id[:12]}-{os.getpid()}"
-        configured = os.environ.get("MIRAGE_DRI_DEVICES", "") if devices else ""
+        backend = manifest.get("backend", "vulkan")
+        configured = os.environ.get("MIRAGE_DRI_DEVICES", "") if devices and backend == "vulkan" else ""
         release = host_data / "runtimes" / "releases" / build_id if revision is not None else host_data / "runtimes" / "current"
         container = self.engine.create(
             name, image, args,
             [f"{release / 'bin'}:/opt/sd/bin:ro"],
             [Path(value) for value in configured.split(",") if value],
             environment={"LD_LIBRARY_PATH": "/opt/sd/bin"},
+            device_requests=nvidia_device_requests(self.engine.engine) if devices and backend == "cuda" else [],
         )
         try:
             self.engine.start(container)
@@ -139,6 +146,11 @@ class RuntimeManager:
             raise WorkbenchError("runtime_not_found", f"Unknown runtime release: {revision}", 404)
         if (self.paths.data / ".active-job").exists():
             raise WorkbenchError("runtime_busy", "Cannot switch runtimes while a job is active", 409)
+        target_backend = self.manifest(revision).get("backend", "vulkan")
+        if (self.paths.runtime_current / "manifest.json").is_file():
+            current_backend = self.manifest().get("backend", "vulkan")
+            if target_backend != current_backend:
+                raise WorkbenchError("runtime_backend_mismatch", "Use the installer to switch GPU backends", 409)
         self.verify(revision=revision)
         current = self.paths.runtime_current
         previous = os.readlink(current) if current.is_symlink() else None

@@ -6,9 +6,9 @@ Mirage is a web interface for generating and editing images on your Linux machin
 
 ## 1. Install the web interface
 
-You’ll need x86-64 Linux, a Vulkan GPU with a render device under `/dev/dri`, Python 3.11+, and Podman or Docker with access to its API socket. Allow at least 8 GB of free space for setup, plus 6.7 GB for the starter model, and an internet connection.
+You’ll need x86-64 Linux, Python 3.11+, and Podman or Docker with access to its API socket. Mirage automatically selects CUDA for an NVIDIA GPU with a configured NVIDIA Container Toolkit, or Vulkan for a GPU with a render device under `/dev/dri`. Allow at least 8 GB of free space for setup, plus 6.7 GB for the starter model, and an internet connection. CUDA builds require additional space for the CUDA toolchain.
 
-The installer builds Mirage in containers and starts the web service. It uses the latest published release, the newest version-sorted Git tag if no release is published, or Git HEAD if there are no tags.
+The installer builds Mirage in containers and starts the web service. It uses the latest published release, the newest version-sorted Git tag if no release is published, or Git HEAD if there are no tags. Use `--backend cuda` or `--backend vulkan` to override automatic GPU detection; existing installations reuse their saved backend unless you override it. [NVIDIA setup](docs/OPERATIONS.md#nvidia-cuda-setup)
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/dshein-alt/mirage/master/install.sh | sh

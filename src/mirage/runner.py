@@ -4,7 +4,7 @@ import secrets
 import threading
 import time
 
-from .engine import EngineClient
+from .engine import EngineClient, nvidia_device_requests
 from .errors import WorkbenchError
 from .progress import GenerationProgress
 
@@ -34,6 +34,7 @@ class ProcessRunner:
                 log.write("sd.cpp commit: " + str(resolved.get("sd_cpp_commit")) + "\n")
                 log.write("Runtime build: " + str(resolved.get("runtime_build")) + "\n")
                 log.write("Runtime image: " + str(resolved.get("runtime_image_id")) + "\n")
+                log.write("Runtime backend: " + str(resolved.get("runtime_backend", "vulkan")) + "\n")
                 log.write("Arguments: " + " ".join(self.redact_argument(arg) for arg in command) + "\n")
                 log.flush()
                 if self.fake:
@@ -112,9 +113,11 @@ class ProcessRunner:
         if not image:
             raise WorkbenchError("runtime_image_missing", "The job has no recorded immutable runtime image", 500)
         self.engine.require_runtime_image(image)
-        configured_devices = os.environ.get("MIRAGE_DRI_DEVICES", "")
+        backend = resolved.get("runtime_backend", "vulkan")
+        configured_devices = os.environ.get("MIRAGE_DRI_DEVICES", "") if backend == "vulkan" else ""
         devices = [Path(value) for value in configured_devices.split(",") if value]
-        if not devices and os.environ.get("MIRAGE_ALLOW_NO_GPU") != "1":
+        device_requests = nvidia_device_requests(self.engine.engine) if backend == "cuda" else []
+        if backend == "vulkan" and not devices and os.environ.get("MIRAGE_ALLOW_NO_GPU") != "1":
             raise WorkbenchError("gpu_unavailable", "No /dev/dri GPU devices are visible. Check device permissions and Vulkan setup", 503)
         build_id = resolved.get("runtime_build")
         if not build_id or Path(build_id).name != build_id:
@@ -132,7 +135,7 @@ class ProcessRunner:
         ]
         container = self.engine.create(
             name, image, command, binds, devices, self.settings.get("environment", {}),
-            line_output=True,
+            device_requests=device_requests, line_output=True,
         )
         self.database.set_container(job["id"], container)
         try:
