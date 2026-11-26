@@ -13,7 +13,15 @@ try:
     state = json.load(open(sys.argv[1], encoding="utf-8"))
 except (OSError, ValueError):
     state = {}
-for value in (state.get("data_dir", ""), state.get("engine", ""), state.get("app_image", {}).get("id", ""), state.get("deployment_id", ""), state.get("server", {}).get("port", 8765), state.get("server", {}).get("mode", "local")):
+for value in (
+    state.get("data_dir", ""),
+    state.get("engine", ""),
+    state.get("app_image", {}).get("id", ""),
+    state.get("deployment_id", ""),
+    state.get("server", {}).get("port", 8765),
+    state.get("server", {}).get("mode", "local"),
+    state.get("source_reference", {}).get("kind", ""),
+):
     print(value)
 PY
     )
@@ -122,11 +130,13 @@ case "${1:-}" in
         exec "$ENGINE" logs -f "$NAME"
         ;;
     runtime)
-        if [[ "${2:-}" == build ]]; then
+        if [[ "${2:-}" == build || "${2:-}" == repair ]]; then
             shift 2
-            exec "$ROOT/scripts/runtime-build.sh" "${1:-79dc7ca9074d79419a46380cdb95a4524db9b74c}" --activate
-        elif [[ "${2:-}" == repair ]]; then
-            exec "$ROOT/scripts/runtime-build.sh" "${3:-79dc7ca9074d79419a46380cdb95a4524db9b74c}" --activate
+            export MIRAGE_DATA_DIR="$DATA"
+            if [[ "${STATE_VALUES[6]:-}" == release || "${STATE_VALUES[6]:-}" == head ]]; then
+                set -- "$@" --container-git
+            fi
+            exec "$ROOT/scripts/runtime-build.sh" "$@" --activate
         fi
         ;;
     backup)

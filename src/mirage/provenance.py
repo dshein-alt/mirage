@@ -10,13 +10,35 @@ BUILD_INPUTS = (
     "docker/export-runtime.sh",
 )
 IGNORED_DIRECTORIES = {".git", "build", "__pycache__", ".pytest_cache"}
+GIT_IMAGE = "docker.io/alpine/git:v2.54.1"
+
+
+def git_output(arguments):
+    return subprocess.run(
+        arguments, check=True, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ).stdout.strip()
 
 
 def git(root, *args):
-    return subprocess.run(
-        ["git", "-C", str(root), *args], check=True, text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    ).stdout.strip()
+    return git_output(["git", "-C", str(root), *args])
+
+
+def container_git(checkout, engine, image=GIT_IMAGE):
+    checkout = Path(checkout).resolve()
+    arguments = [engine, "run", "--rm", "--network=none", "--user", f"{os.getuid()}:{os.getgid()}"]
+    if engine == "podman":
+        arguments += ["--userns=keep-id"]
+    arguments += [
+        "-e", "HOME=/tmp", "-e", "GIT_OPTIONAL_LOCKS=0",
+        "-v", f"{checkout}:/checkout:ro", "-w", "/checkout", image,
+    ]
+
+    def invoke(root, *args):
+        path = Path("/checkout") / Path(root).resolve().relative_to(checkout)
+        return git_output([*arguments, "-C", str(path), *args])
+
+    return invoke
 
 
 def update_file_hash(digest, path, relative):
@@ -59,15 +81,16 @@ def inputs_hash(root):
     return digest.hexdigest()
 
 
-def source_identity(root, build_environment=None):
+def source_identity(root, build_environment=None, *, git_command=None):
     root = Path(root).resolve()
     source = root / "stable-diffusion.cpp"
     if not (source / "ggml" / "src").is_dir():
         raise RuntimeError(
             "stable-diffusion.cpp submodules are missing; run: git submodule update --init --recursive"
         )
-    commit = git(source, "rev-parse", "HEAD")
-    status = git(
+    git_command = git_command or git
+    commit = git_command(source, "rev-parse", "HEAD")
+    status = git_command(
         root, "status", "--porcelain=v1", "--untracked-files=all", "--",
         "stable-diffusion.cpp", *BUILD_INPUTS,
     )

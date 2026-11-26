@@ -4,6 +4,9 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
+from unittest.mock import Mock
+from urllib.error import HTTPError
 
 import pytest
 
@@ -47,8 +50,91 @@ def test_server_option_precedence(tmp_path, monkeypatch):
     assert (explicit.mode, explicit.port) == ("authenticated", 9200)
 
 
+def test_terminal_setup_selects_mode_port_models_and_tokens(tmp_path, monkeypatch):
+    for name in ("MIRAGE_PORT", "MIRAGE_MODE", "MIRAGE_MODELS"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("MIRAGE_API_TOKEN", "")
+    monkeypatch.setenv("MIRAGE_BROWSER_TOKEN", "")
+    installer = make_installer(tmp_path, ["--standalone"])
+    terminal = Mock()
+    terminal.readline.side_effect = ["invalid\n", "2\n", "0\n", "9100\n", "unknown\n", "3, 4\n"]
+    getpass = Mock(side_effect=["admin-token-fixture", "browser-token-fixture"])
+    monkeypatch.setattr(installer_module.getpass, "getpass", getpass)
+
+    installer.resolve_server_options(terminal)
+    assert (installer.mode, installer.port) == ("authenticated", 9100)
+    assert installer.selected_models(terminal) == "qwen-edit,moss"
+    assert installer.credentials(terminal) == "admin-token-fixture"
+    assert all(call.kwargs["stream"] is terminal for call in getpass.call_args_list)
+    assert os.environ["MIRAGE_BROWSER_TOKEN"] == "browser-token-fixture"
+
+
+def test_dialog_setup_prefills_saved_choices(tmp_path, monkeypatch):
+    for name in ("MIRAGE_PORT", "MIRAGE_MODE", "MIRAGE_MODELS"):
+        monkeypatch.delenv(name, raising=False)
+    installer = make_installer(tmp_path, ["update"])
+    installer.state = {"server": {"mode": "authenticated", "port": 9100}, "models": "qwen-edit"}
+    terminal = Mock()
+    prompt = Mock(side_effect=["local", "9200", '"qwen-edit" "moss"'])
+    monkeypatch.setattr(installer_module, "dialog_prompt", prompt)
+
+    installer.resolve_server_options(terminal, "dialog")
+    assert (installer.mode, installer.port) == ("local", 9200)
+    assert installer.selected_models(terminal, "dialog") == "qwen-edit,moss"
+    choice, port, models = [call.args for call in prompt.call_args_list]
+    assert choice[:5] == (terminal, "dialog", "--default-item", "authenticated", "--menu")
+    assert port[2] == "--inputbox" and port[-1] == "9100"
+    assert models[2] == "--checklist"
+    assert models[models.index("qwen-edit") + 2] == "ON"
+
+
+def test_explicit_setup_values_skip_prompts(tmp_path):
+    installer = make_installer(tmp_path, ["--mode", "local", "--port", "9200", "--skip-models"])
+    terminal = Mock()
+    installer.resolve_server_options(terminal, "dialog")
+    assert (installer.mode, installer.port, installer.selected_models(terminal, "dialog")) == ("local", 9200, "none")
+    assert not terminal.mock_calls
+
+
+def test_streamed_shell_installer_uses_python_without_host_tools(tmp_path):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "python3").symlink_to(sys.executable)
+    remote = tmp_path / "install.py"
+    remote.write_text(
+        "import json, os, sys\n"
+        "print(json.dumps([sys.argv[1:], os.environ.get('MIRAGE_MODELS')]))\n"
+    )
+    result = subprocess.run(
+        [shutil.which("sh"), "-s", "--", "update", "--port", "9000"],
+        input=(ROOT / "install.sh").read_text(), cwd=tmp_path, text=True,
+        stdout=subprocess.PIPE, check=True,
+        env={"PATH": str(tools), "MIRAGE_INSTALLER_URL": remote.as_uri()},
+    )
+    assert json.loads(result.stdout) == [
+        ["--standalone", "update", "--port", "9000"],
+        None,
+    ]
+
+
+def test_installer_downloads_selected_models_inside_service(tmp_path, monkeypatch):
+    installer = make_installer(tmp_path)
+    installer.port = 9000
+    calls = []
+    monkeypatch.setattr(installer, "run_engine", lambda *arguments: calls.append(arguments))
+
+    installer.install_models("qwen-edit", {"id": "sha256:fixture"})
+
+    assert calls == [(
+        "exec", "-e", "MIRAGE_API_URL=http://127.0.0.1:9000",
+        "mirage", "python", "-m", "mirage.cli", "models", "install", "qwen", "--wait", "--with-editing",
+    )]
+
+
 @pytest.mark.skipif(shutil.which("git") is None, reason="release fixture requires Git")
-def test_standalone_release_fixture_uses_persistent_versioned_source(tmp_path, monkeypatch):
+@pytest.mark.parametrize("engine", ["docker", "podman"])
+@pytest.mark.parametrize("source", ["published", "tag", "head"])
+def test_standalone_release_fixture_uses_persistent_versioned_source(tmp_path, monkeypatch, engine, source):
     repository = tmp_path / "release-repository"
     (repository / "stable-diffusion.cpp" / "ggml" / "src").mkdir(parents=True)
     (repository / "stable-diffusion.cpp" / "ggml" / "src" / "source.cpp").write_text("source")
@@ -58,18 +144,60 @@ def test_standalone_release_fixture_uses_persistent_versioned_source(tmp_path, m
     subprocess.run(["git", "-C", str(repository), "config", "user.email", "test@example.invalid"], check=True)
     subprocess.run(["git", "-C", str(repository), "add", "."], check=True)
     subprocess.run(["git", "-C", str(repository), "commit", "-qm", "release"], check=True)
-    subprocess.run(["git", "-C", str(repository), "tag", "v1.0.0"], check=True)
-    commit = subprocess.run(["git", "-C", str(repository), "rev-parse", "HEAD"], check=True, text=True, capture_output=True).stdout.strip()
+    released_commit = subprocess.check_output(["git", "-C", str(repository), "rev-parse", "HEAD"], text=True).strip()
+    if source != "head":
+        subprocess.run(["git", "-C", str(repository), "tag", "v1.0.0"], check=True)
+    subprocess.run(["git", "-C", str(repository), "checkout", "-qb", "v1.0.0"], check=True)
+    subprocess.run(["git", "-C", str(repository), "commit", "--allow-empty", "-qm", "branch only"], check=True)
+    head_commit = subprocess.check_output(["git", "-C", str(repository), "rev-parse", "HEAD"], text=True).strip()
+    if source != "head":
+        subprocess.run(["git", "-C", str(repository), "tag", "v1.9.0", released_commit], check=True)
+        subprocess.run(["git", "-C", str(repository), "tag", "v1.10.0"], check=True)
     release = tmp_path / "release.json"
     release.write_text(json.dumps({"tag_name": "v1.0.0", "repository": str(repository)}))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "persistent"))
-    installer = make_installer(tmp_path, ["--standalone", "--release-api", release.as_uri()])
+    arguments = ["--standalone", "--release-api", release.as_uri()]
+    if source != "published":
+        arguments += ["--repository", str(repository)]
+        monkeypatch.setattr(installer_module, "urlopen", Mock(side_effect=HTTPError(release.as_uri(), 404, "missing", None, None)))
+    installer = make_installer(tmp_path, arguments)
+    installer.engine = engine
+    calls = []
+
+    def run_engine(*arguments, capture):
+        assert capture
+        assert arguments[:4] == ("run", "--rm", "--user", f"{os.getuid()}:{os.getgid()}")
+        assert ("--userns=keep-id" in arguments) == (engine == "podman")
+        assert installer_module.GIT_IMAGE in arguments
+        mount = arguments[arguments.index("-w") - 1]
+        directory, target, access = mount.rsplit(":", 2)
+        assert target == "/checkout"
+        if "--entrypoint" in arguments:
+            assert access == "rw"
+            command = ["/bin/sh", *arguments[arguments.index(installer_module.GIT_IMAGE) + 1:]]
+        else:
+            assert access == "ro"
+            command = ["git", "rev-parse", "HEAD"]
+        calls.append(access)
+        return subprocess.check_output(command, cwd=directory, text=True).strip()
+
+    def unexpected_host_command(*args, **kwargs):
+        pytest.fail("standalone source resolution bypassed the container engine")
+
+    monkeypatch.setattr(installer, "run_engine", run_engine)
+    monkeypatch.setattr(installer_module, "command", unexpected_host_command)
 
     reference = installer.resolve_source()
-    assert reference["kind"] == "release"
+    tag = {"published": "v1.0.0", "tag": "v1.10.0", "head": None}[source]
+    commit = released_commit if source == "published" else head_commit
+    assert reference["kind"] == ("release" if tag else "head")
+    assert reference["tag"] == tag
     assert reference["commit"] == commit
-    assert installer.source == tmp_path / "persistent" / "mirage" / "sources" / f"v1.0.0-{commit[:12]}"
+    assert installer.source == tmp_path / "persistent" / "mirage" / "sources" / f"{tag or 'head'}-{commit[:12]}"
     assert (installer.source / "stable-diffusion.cpp" / "ggml" / "src").is_dir()
+    assert installer.resolve_source() == reference
+    assert calls == ["rw", "rw", "ro"]
+    assert list(installer.source.parent.iterdir()) == [installer.source]
 
 
 def recovery_fixture(tmp_path, committed=False):

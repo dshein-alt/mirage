@@ -13,7 +13,7 @@ APP_INPUTS = ("pyproject.toml", "uv.lock", "LICENSE", "src", "config", "web", "d
 BASE_IMAGES = ("python:3.12-slim", "ghcr.io/astral-sh/uv:0.9.13")
 
 
-def app_identity(root, base_images):
+def app_identity(root, base_images, *, git_command=None):
     root = Path(root).resolve()
     digest = hashlib.sha256()
     for name in APP_INPUTS:
@@ -26,21 +26,23 @@ def app_identity(root, base_images):
     environment = json.dumps(base_images, sort_keys=True, separators=(",", ":"))
     digest.update(environment.encode())
     build_id = f"app-{digest.hexdigest()[:32]}"
+    git_command = git_command or git
     try:
-        dirty = bool(git(root, "status", "--porcelain=v1", "--untracked-files=all", "--", *APP_INPUTS))
+        dirty = bool(git_command(root, "status", "--porcelain=v1", "--untracked-files=all", "--", *APP_INPUTS))
     except (OSError, RuntimeError, subprocess.CalledProcessError):
         dirty = False
     return {"app_build_id": build_id, "deployment_id": build_id, "app_source_sha256": digest.hexdigest(), "base_images": base_images, "dirty": dirty}
 
 
-def build_app(root, data, engine):
+def build_app(root, data, engine, *, git_command=None):
     root = Path(root).resolve()
     data = Path(data).resolve()
     bases = {}
     for reference in BASE_IMAGES:
         run([engine, "pull", reference])
         bases[reference] = image_id(engine, reference)
-    identity = app_identity(root, bases)
+    git_command = git_command or git
+    identity = app_identity(root, bases, git_command=git_command)
     build_id = identity["app_build_id"]
     reference = f"localhost/mirage-app:{build_id}"
     destination = data / "releases" / "app" / build_id
@@ -55,7 +57,7 @@ def build_app(root, data, engine):
     manifest = {
         "schema_version": 2,
         **identity,
-        "source_reference": git(root, "rev-parse", "HEAD") if (root / ".git").exists() else None,
+        "source_reference": git_command(root, "rev-parse", "HEAD") if (root / ".git").exists() else None,
         "app_image": {"reference": reference, "id": immutable},
     }
     write_json(manifest_path, manifest)

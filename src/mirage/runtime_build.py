@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import sys
 
-from .provenance import source_identity, write_json
+from .provenance import container_git, source_identity, write_json
 from .util import file_sha256, read_json
 
 
@@ -36,14 +36,14 @@ def verify_files(root, manifest):
             raise RuntimeError(f"runtime artifact checksum mismatch: {relative}")
 
 
-def build_runtime(root, data, engine, revision=None, activate=False):
+def build_runtime(root, data, engine, revision=None, activate=False, *, git_command=None):
     root = Path(root).resolve()
     data = Path(data).resolve()
     if not (root / "stable-diffusion.cpp" / "ggml" / "src").is_dir():
         raise RuntimeError("source submodules are missing; run: git submodule update --init --recursive")
     run([engine, "pull", "ubuntu:24.04"])
     base_id = image_id(engine, "ubuntu:24.04")
-    identity = source_identity(root, {"ubuntu:24.04": base_id})
+    identity = source_identity(root, {"ubuntu:24.04": base_id}, git_command=git_command)
     if revision and identity["sd_cpp_commit"] != revision:
         raise RuntimeError(f"source is at {identity['sd_cpp_commit']}, requested {revision}")
     build_id = identity["build_id"]
@@ -130,9 +130,11 @@ def main():
     parser.add_argument("engine", choices=("podman", "docker"))
     parser.add_argument("revision", nargs="?")
     parser.add_argument("--activate", action="store_true")
+    parser.add_argument("--container-git", action="store_true")
     args = parser.parse_args()
     try:
-        build_runtime(args.root, args.data, args.engine, args.revision, args.activate)
+        git_command = container_git(args.root, args.engine) if args.container_git else None
+        build_runtime(args.root, args.data, args.engine, args.revision, args.activate, git_command=git_command)
     except (OSError, RuntimeError, ValueError) as error:
         print(f"mirage: {error}", file=sys.stderr)
         return 1

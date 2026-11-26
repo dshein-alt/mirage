@@ -6,21 +6,23 @@ Mirage is a web interface for generating and editing images on your Linux machin
 
 ## 1. Install the web interface
 
-You’ll need x86-64 Linux, a Vulkan GPU with a render device under `/dev/dri`, Git, Python 3.11+, and Podman or Docker with access to its API socket. Allow at least 8 GB of free space for setup, plus 6.7 GB for the starter model. Setup and model downloads require internet access.
+You’ll need x86-64 Linux, a Vulkan GPU with a render device under `/dev/dri`, Python 3.11+, and Podman or Docker with access to its API socket. Allow at least 8 GB of free space for setup, plus 6.7 GB for the starter model, and an internet connection.
 
-Run these commands once. The installer builds Mirage and starts the web service.
+The installer builds Mirage in containers and starts the web service. It uses the latest published release, the newest version-sorted Git tag if no release is published, or Git HEAD if there are no tags.
 
 ```sh
-git clone --recurse-submodules https://github.com/dshein-alt/mirage.git
-cd mirage
-./install.sh --non-interactive --skip-models
+curl -fsSL https://raw.githubusercontent.com/dshein-alt/mirage/master/install.sh | sh
 ```
 
-When the installer prints `Mirage is ready`, open **[http://127.0.0.1:8765](http://127.0.0.1:8765)** in your browser.
+Run the same installation with Python’s standard library if you have no `curl`. [Python-only installer](docs/OPERATIONS.md#install-with-python)
 
-## 2. Install a model in the browser
+In the setup prompts, choose **local** access from this machine or **authenticated** access with sign-in tokens, then choose a port and the models to download. The defaults are **local**, port **8765**, and **Z-Image Turbo**.
 
-Open **Models**, find **Z-Image Turbo**, and click **Install**. Wait for the download job to finish in **Jobs**. You can return to **Models** later to add MOSS-Image-SFT or Qwen-Image 2.1.
+When the installer prints `Mirage is ready`, open the address it shows. The default is **[http://127.0.0.1:8765](http://127.0.0.1:8765)**. For authenticated access, sign in with your browser token.
+
+## 2. Add a model in the browser
+
+If you skipped Z-Image Turbo in setup, open **Models**, find **Z-Image Turbo**, and click **Install**. Wait for the download job to finish in **Jobs**. You can return to **Models** later to add MOSS-Image-SFT or Qwen-Image 2.1.
 
 ## 3. Generate and find your first image
 
@@ -39,4 +41,4 @@ In **Models**, click **Install** on Qwen-Image 2.1. If Qwen is already installed
 
 ## License
 
-Mirage and its pinned `stable-diffusion.cpp` dependency each use the MIT license. Model weights have separate licenses. [Mirage license](LICENSE) · [stable-diffusion.cpp license](https://github.com/leejet/stable-diffusion.cpp/blob/79dc7ca9074d79419a46380cdb95a4524db9b74c/LICENSE) · [Model registry](config/models.json)
+Mirage and its pinned `stable-diffusion.cpp` dependency each use the MIT license. Model weights have separate licenses. [Mirage license](LICENSE) · [stable-diffusion.cpp license](https://github.com/leejet/stable-diffusion.cpp/blob/52491bd9f1fc15281791723bdff13baab7fd6819/LICENSE) · [Model registry](config/models.json)

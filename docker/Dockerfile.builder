@@ -1,7 +1,7 @@
 FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG SD_REVISION=79dc7ca9074d79419a46380cdb95a4524db9b74c
+ARG SD_REVISION=52491bd9f1fc15281791723bdff13baab7fd6819
 ENV SD_REVISION=$SD_REVISION
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

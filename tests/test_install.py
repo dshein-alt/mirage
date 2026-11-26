@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import subprocess
 
@@ -11,11 +12,13 @@ def test_shell_syntax():
 
 
 def test_pinned_source_revision():
+    registry = json.loads((ROOT / "config/models.json").read_text())
+    settings = json.loads((ROOT / "config/settings.default.json").read_text())
+    revision = registry["minimum_sd_revision"]
+    assert settings["runtime"]["minimum_sd_revision"] == revision
+    assert f"ARG SD_REVISION={revision}" in (ROOT / "docker/Dockerfile.builder").read_text()
+
     source = ROOT / "stable-diffusion.cpp"
     if (source / ".git").exists():
         result = subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"], check=True, text=True, capture_output=True)
-        revision = result.stdout.strip()
-    else:
-        import json
-        revision = json.loads((ROOT / "config/models.json").read_text())["minimum_sd_revision"]
-    assert revision == "79dc7ca9074d79419a46380cdb95a4524db9b74c"
+        assert result.stdout.strip() == revision

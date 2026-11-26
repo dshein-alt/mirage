@@ -2,19 +2,35 @@
 
 The README walks through installing the web interface and creating your first image. [Quick start](../README.md#1-install-the-web-interface)
 
-## Install with custom options
+## Install with Python
 
-From the Mirage checkout, run `./install.sh --help` for all options. If you cloned without source dependencies, run `git submodule update --init --recursive` first.
+This command uses Python’s standard library to fetch the installer. Mirage uses Docker or Podman to fetch the source and build the service.
 
 ```sh
-./install.sh --data-dir "$HOME/mirage-data" --port 9000 --runtime docker
+python3 -c 'from urllib.request import urlopen; url = "https://raw.githubusercontent.com/dshein-alt/mirage/master/install.py"; exec(compile(urlopen(url, timeout=60).read(), url, "exec"))' \
+  --standalone
 ```
 
-By default Mirage uses `./data`, port `8765`, and Podman when both engines are installed. The installer remembers the data directory, engine, access mode, and port for future commands. Use `--prefix` to change where the launcher is linked.
+To manage an existing installation with this command, add `update` or `remove --yes` before `--standalone`. You can also add the installer options below.
+
+## Install with custom options
+
+Pass options to the published shell installer after `sh -s --`. Run it with `--help` for all options.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dshein-alt/mirage/master/install.sh | \
+  sh -s -- --data-dir "$HOME/mirage-data" --port 9000 --runtime docker
+```
+
+Standalone installs store data in `~/.local/share/mirage/data` by default and keep the versioned source separately in `~/.local/share/mirage/sources`. Both paths respect `XDG_DATA_HOME`. The default port is `8765`, and the installer selects Podman when both engines are installed. It remembers the data directory, engine, access mode, and port. Use `--prefix` to change where the launcher is linked.
+
+The installer presents the access mode, port, and model selection in `dialog` or `whiptail` when either is available. It uses plain terminal prompts on systems without these tools. Updates prefill your saved choices. Command-line arguments and environment variables can supply individual choices. Use `--non-interactive` to skip all prompts.
+
+To build from a development checkout, initialize its submodules and run `./install.sh` from the checkout. This path uses host Git and defaults to `./data`.
 
 ### Unattended setup and local model files
 
-Pass a model ID or a comma-separated list. `all` includes Qwen’s editing component. Use `--skip-models` to set up the application and add models later.
+Pass a model ID or a comma-separated list. `all` includes Qwen’s editing component. With the published shell installer, add the options after `sh -s --`. In the Python command, add them after `--standalone`. The following examples use a development checkout.
 
 ```sh
 ./install.sh --non-interactive --models zimage
@@ -31,13 +47,13 @@ mirage models verify zimage
 
 If a download is interrupted, run the same `mirage models install` command again to resume. Set `HF_TOKEN` before installation or service startup if Hugging Face requires a token for the files you need.
 
-### Install from a tagged release
+### Use a different release source
 
-The standalone installer needs a release metadata URL and a Git repository. It reads the release tag and puts the source for that tag in a versioned directory, with persistent data stored separately.
+The standalone installer prefers the latest published Mirage release on GitHub. If the release endpoint reports no release, it checks the repository’s tags in descending version order. It uses the repository’s default branch at Git HEAD when there are no tags. You can override the release metadata URL and the Git repository. A release response must include a `tag_name` field.
 
 ```sh
-python3 install.py --standalone --release-api "$release_api" \
-  --repository "$release_repository" --non-interactive --skip-models
+curl -fsSL https://raw.githubusercontent.com/dshein-alt/mirage/master/install.sh | \
+  sh -s -- --release-api "$release_api" --repository "$release_repository"
 ```
 
 ## Use the command line
@@ -71,12 +87,13 @@ The resolution presets are `sd` (512×512), `hd` (1024×1024, the default), and 
 
 In the default `local` mode, Mirage listens on `127.0.0.1` and gives local users administrator access without a sign-in. For access from other devices, use `authenticated` mode on a trusted LAN or behind an authenticated HTTPS reverse proxy. The service can control containers through the engine socket. Keep it off the public internet.
 
-For an existing installation, set both tokens and update the access mode. For a new installation, omit `update`.
+Choose **authenticated** in the setup prompts to enter both tokens without echo. For unattended setup, set both tokens before running the installer. For a new installation, omit `update`.
 
 ```sh
 export MIRAGE_API_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 export MIRAGE_BROWSER_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
-./install.sh update --mode authenticated --non-interactive --skip-models
+curl -fsSL https://raw.githubusercontent.com/dshein-alt/mirage/master/install.sh | \
+  sh -s -- update --mode authenticated --non-interactive --skip-models
 ```
 
 Open the Mirage server’s LAN address and port, or the proxy’s HTTPS URL, and sign in with one of the tokens.
@@ -96,13 +113,19 @@ For Compose, set `MIRAGE_APP_IMAGE` to the built application image ID or unique 
 | The installer cannot find the engine socket | For rootless Podman with systemd, run `systemctl --user enable --now podman.socket`. For Docker, check that the daemon is running and your user can access its socket. |
 | A model is missing from your installation | Check **Models** or run `mirage models list`. Install the model and wait for the download job to finish before submitting a prompt. For Qwen editing, include its optional component. |
 | Mirage cannot use the GPU | Check that your user can access a render device under `/dev/dri`. With Mirage running, use `mirage runtime verify --devices` to check device visibility in the runtime. |
-| The runtime image is missing | Run `mirage runtime repair` to recreate it from a verified runtime release when available. If you use a custom data directory, set `MIRAGE_DATA_DIR` to that path for this command. |
+| The runtime image is missing | Run `mirage runtime repair` to recreate it from a verified runtime release when available. |
 
 Use `mirage runtime status` to see the active release and `mirage runtime rollback` to switch back to the previous release when no generation jobs are active.
 
 ## Update or remove Mirage
 
-Wait for queued and running jobs to finish. To update a Git checkout, first check out the version you want and run `git submodule update --init --recursive`. Then run the installer from that checkout.
+Wait for queued and running jobs to finish. For a standalone installation, use the installer to fetch the current release or Git revision.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dshein-alt/mirage/master/install.sh | sh -s -- update
+```
+
+For a development checkout, switch to the version you want and run `git submodule update --init --recursive`. Then run the installer from that checkout.
 
 ```sh
 ./install.sh update --non-interactive --skip-models
@@ -110,23 +133,25 @@ Wait for queued and running jobs to finish. To update a Git checkout, first chec
 
 The update verifies the new build, backs up the database and configuration, and keeps the models, images, and other user data. If an update is interrupted, rerun the installer so it can recover before starting another operation.
 
-To uninstall, run `./install.sh remove` and confirm the prompt. This removes the application containers and installed launcher while retaining your data directory. For unattended removal, use `./install.sh remove --yes --non-interactive`.
+To uninstall a standalone installation, run the shell installer with `sh -s -- remove --yes`. From a checkout, run `./install.sh remove` and confirm the prompt. Removal deletes the application containers and launcher and retains your data directory.
 
 ## Back up and restore data
 
-The data directory contains the SQLite database, settings, reference images, generated PNGs and metadata, model files, and compiled runtimes. It defaults to `./data` for a checkout. Replace `./data` below if you selected a different path.
+The data directory contains the SQLite database, settings, reference images, generated PNGs and metadata, model files, and compiled runtimes. Use the path printed by the installer, which defaults to `~/.local/share/mirage/data` for standalone installs and `./data` for a checkout.
 
 Wait for active jobs to finish, then stop Mirage and copy the full directory. Allow enough free space for the models and runtimes as well as the images.
 
 ```sh
-mirage stop && cp -a ./data "$HOME/mirage-backup-$(date +%Y%m%d-%H%M%S)"
+data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/mirage/data"
+mirage stop && cp -a "$data_dir" "$HOME/mirage-backup-$(date +%Y%m%d-%H%M%S)"
 mirage start
 ```
 
 To restore, stop Mirage if it is running and copy the backup to a new data directory. Point the installation at that directory so the launcher remembers it.
 
 ```sh
-./install.sh update --data-dir "$HOME/mirage-restored" --non-interactive --skip-models
+curl -fsSL https://raw.githubusercontent.com/dshein-alt/mirage/master/install.sh | \
+  sh -s -- update --data-dir "$HOME/mirage-restored"
 ```
 
 On a fresh machine, omit `update` and use the same data directory option. To rebuild the gallery index from existing PNGs and JSON metadata, run `mirage gallery reindex`.

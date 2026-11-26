@@ -1,7 +1,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from mirage.provenance import BUILD_INPUTS, source_identity
+from mirage.provenance import BUILD_INPUTS, container_git, source_identity
 
 
 COMMIT = "79dc7ca9074d79419a46380cdb95a4524db9b74c"
@@ -36,6 +36,20 @@ def test_build_id_accounts_for_nested_source_and_build_inputs(tmp_path):
     (tmp_path / BUILD_INPUTS[0]).write_text("new builder input")
     assert identity(tmp_path)["build_id"] != nested_change["build_id"]
     assert identity(tmp_path, environment={"ubuntu:24.04": "sha256:other"})["build_id"] != identity(tmp_path)["build_id"]
+
+
+def test_container_git_mounts_the_checkout_for_submodule_provenance(tmp_path):
+    source_fixture(tmp_path)
+    with patch("mirage.provenance.git_output", side_effect=[COMMIT, ""]) as run:
+        manifest = source_identity(tmp_path, git_command=container_git(tmp_path, "podman"))
+
+    assert manifest["sd_cpp_commit"] == COMMIT
+    first, second = [call.args[0] for call in run.call_args_list]
+    assert first[:3] == ["podman", "run", "--rm"]
+    assert "--userns=keep-id" in first
+    assert f"{tmp_path}:/checkout:ro" in first
+    assert first[-4:] == ["-C", "/checkout/stable-diffusion.cpp", "rev-parse", "HEAD"]
+    assert second[second.index("-C") + 1:][:2] == ["/checkout", "status"]
 
 
 def test_job_snapshot_contains_runtime_identity(app, registry):

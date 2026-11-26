@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
+from contextlib import contextmanager
 import fcntl
 import getpass
+import io
 import json
 import os
 from pathlib import Path
@@ -19,8 +21,61 @@ import uuid
 
 APP_NAME = "mirage"
 DATABASE_NAME = "mirage.sqlite3"
-DEFAULT_RELEASE_API = None
+DEFAULT_RELEASE_API = "https://api.github.com/repos/dshein-alt/mirage/releases/latest"
+DEFAULT_RELEASE_REPOSITORY = "https://github.com/dshein-alt/mirage.git"
+GIT_IMAGE = "docker.io/alpine/git:v2.54.1"
 TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{16,64}\Z")
+ACCESS_MODES = {
+    "local": "This machine only (127.0.0.1)",
+    "authenticated": "Network access with sign-in tokens",
+}
+MODEL_CHOICES = {
+    "zimage": "Z-Image Turbo",
+    "qwen": "Qwen-Image 2.1",
+    "qwen-edit": "Qwen-Image 2.1 with editing",
+    "moss": "MOSS-Image-SFT",
+}
+
+
+@contextmanager
+def installer_terminal(non_interactive):
+    if non_interactive:
+        yield None
+        return
+    try:
+        device = open("/dev/tty", "r+b", buffering=0)
+    except OSError:
+        yield None
+        return
+    with io.TextIOWrapper(device, write_through=True) as terminal:
+        yield terminal
+
+
+def read_terminal(terminal, prompt):
+    print(prompt, end="", file=terminal, flush=True)
+    answer = terminal.readline()
+    if not answer:
+        raise RuntimeError("installation cancelled")
+    return answer.strip()
+
+
+def dialog_prompt(terminal, dialog, *arguments):
+    result = subprocess.run(
+        [dialog, "--stdout", "--title", "Mirage setup", *arguments],
+        stdin=terminal, stderr=terminal, stdout=subprocess.PIPE, text=True,
+    )
+    if result.returncode:
+        raise RuntimeError("installation cancelled")
+    return result.stdout.strip()
+
+
+def model_selection(selection):
+    models = re.split(r"[,\s]+", selection.strip()) if selection.strip() else []
+    if "all" in models:
+        return list(MODEL_CHOICES)
+    if any(model not in MODEL_CHOICES and model != "none" for model in models):
+        raise RuntimeError("unknown model selection")
+    return models
 
 
 def port_number(value):
@@ -160,8 +215,11 @@ def backup_sqlite(source, destination):
 class Installer:
     def __init__(self, args):
         self.args = args
-        invoked = Path(args.source_dir).resolve() if args.source_dir else Path(__file__).resolve().parent
-        self.local_source = invoked if (invoked / "pyproject.toml").is_file() and not args.standalone else None
+        self.local_source = None
+        if not args.standalone:
+            invoked = Path(args.source_dir).resolve() if args.source_dir else Path(__file__).resolve().parent
+            if (invoked / "pyproject.toml").is_file():
+                self.local_source = invoked
         state_default = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "mirage" / "installation.json"
         self.state_path = Path(args.state_file or os.environ.get("MIRAGE_STATE_FILE") or state_default).resolve()
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -248,51 +306,137 @@ class Installer:
             raise RuntimeError(f"container API socket not found: {path}")
         return path
 
+    def git_container_arguments(self):
+        arguments = ["run", "--rm", "--user", f"{os.getuid()}:{os.getgid()}"]
+        if self.engine == "podman":
+            arguments += ["--userns=keep-id"]
+        return arguments + ["-e", "HOME=/tmp", "-e", "GIT_TERMINAL_PROMPT=0"]
+
     def resolve_source(self):
         if self.local_source:
             if not (self.local_source / "stable-diffusion.cpp" / "ggml" / "src").is_dir():
                 raise RuntimeError("source submodules are missing; run: git submodule update --init --recursive")
             self.source = self.local_source
             return {"kind": "local", "path": str(self.source)}
-        release_api = self.args.release_api or os.environ.get("MIRAGE_RELEASE_API") or DEFAULT_RELEASE_API
-        if not release_api:
-            raise RuntimeError("standalone installation requires --release-api or MIRAGE_RELEASE_API until the canonical release host is configured")
-        with urlopen(release_api, timeout=60) as response:
-            release = json.load(response)
-        tag = release["tag_name"]
-        if not tag or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for character in tag):
-            raise RuntimeError("release tag is invalid")
-        repository = self.args.repository or os.environ.get("MIRAGE_RELEASE_REPOSITORY") or release.get("repository")
-        if not repository:
-            raise RuntimeError("the release response does not specify a source repository")
-        base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "mirage" / "sources"
+        repository = self.args.repository or os.environ.get("MIRAGE_RELEASE_REPOSITORY")
+        release_api = self.args.release_api or os.environ.get("MIRAGE_RELEASE_API")
+        if not release_api and repository in (None, DEFAULT_RELEASE_REPOSITORY):
+            release_api = DEFAULT_RELEASE_API
+        tag = ""
+        if release_api:
+            try:
+                with urlopen(release_api, timeout=60) as response:
+                    release = json.load(response)
+            except HTTPError as error:
+                if error.code != 404:
+                    raise
+            else:
+                tag = release.get("tag_name")
+                if not isinstance(tag, str) or not tag:
+                    raise RuntimeError("release tag is invalid")
+                repository = repository or release.get("repository")
+        repository = repository or DEFAULT_RELEASE_REPOSITORY
+        base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")).resolve() / "mirage" / "sources"
         base.mkdir(parents=True, exist_ok=True)
-        temporary = base / f".{tag}.{os.getpid()}.tmp"
-        if temporary.exists():
-            shutil.rmtree(temporary)
-        command(["git", "clone", "--depth", "1", "--branch", tag, "--recurse-submodules", "--shallow-submodules", repository, temporary])
-        commit = command(["git", "-C", temporary, "rev-parse", "HEAD"], capture=True)
-        destination = base / f"{tag}-{commit[:12]}"
-        if destination.exists():
-            shutil.rmtree(temporary)
-        else:
-            os.replace(temporary, destination)
-        actual = command(["git", "-C", destination, "rev-parse", "HEAD"], capture=True)
-        if actual != commit or not (destination / "stable-diffusion.cpp" / "ggml" / "src").is_dir():
-            raise RuntimeError("downloaded release or its recursive submodules are incomplete")
+        arguments = self.git_container_arguments()
+        if Path(repository).is_absolute():
+            arguments += ["-v", f"{repository}:{repository}:ro"]
+        print("Fetching Mirage and its source dependencies in a container", flush=True)
+        with tempfile.TemporaryDirectory(prefix=".checkout-", dir=base) as temporary:
+            source_info = self.run_engine(
+                *arguments, "-v", f"{temporary}:/checkout:rw", "-w", "/checkout",
+                "--entrypoint", "/bin/sh", GIT_IMAGE, "-ec", """
+                    git init -q repository
+                    cd repository
+                    git remote add origin "$2"
+                    tag=$1
+                    if [ -z "$tag" ]; then
+                        tags=$(git ls-remote --tags --refs --sort=-version:refname origin)
+                        tag=$(printf '%s\n' "$tags" | sed -n '1s|^[^[:blank:]]*[[:blank:]]refs/tags/||p')
+                    fi
+                    ref=HEAD
+                    if [ -n "$tag" ]; then
+                        ref="refs/tags/$tag"
+                        git check-ref-format "$ref"
+                    fi
+                    git fetch -q --depth 1 --no-tags origin "$ref"
+                    git checkout -q --detach FETCH_HEAD
+                    git submodule update --init --recursive --depth 1 >&2
+                    git rev-parse HEAD
+                    printf '%s\n' "$tag"
+                """, "sh", tag, repository, capture=True,
+            )
+            commit, _, tag = source_info.partition("\n")
+            checkout = Path(temporary) / "repository"
+            if not re.fullmatch(r"[a-f0-9]{40}", commit) or not (checkout / "stable-diffusion.cpp" / "ggml" / "src").is_dir():
+                raise RuntimeError("downloaded release or its recursive submodules are incomplete")
+            label = re.sub(r"[^A-Za-z0-9._-]", "-", tag) if tag else "head"
+            destination = base / f"{label}-{commit[:12]}"
+            if destination.exists():
+                actual = self.run_engine(
+                    *self.git_container_arguments(), "--network=none", "-v", f"{destination}:/checkout:ro",
+                    "-w", "/checkout", GIT_IMAGE, "rev-parse", "HEAD", capture=True,
+                )
+                if actual != commit or not (destination / "stable-diffusion.cpp" / "ggml" / "src").is_dir():
+                    raise RuntimeError(f"existing release checkout is incomplete: {destination}")
+            else:
+                os.replace(checkout, destination)
         self.source = destination
-        return {"kind": "release", "tag": tag, "commit": commit, "repository": repository, "path": str(destination)}
+        return {
+            "kind": "release" if tag else "head",
+            "tag": tag or None,
+            "commit": commit,
+            "repository": repository,
+            "path": str(destination),
+        }
 
-    def resolve_server_options(self):
+    def resolve_server_options(self, terminal=None, dialog=None):
         server = self.state.get("server", {})
-        port = self.args.port if self.args.port is not None else os.environ.get("MIRAGE_PORT", server.get("port", 8765))
+        port_override = self.args.port if self.args.port is not None else os.environ.get("MIRAGE_PORT")
+        port = port_override if port_override is not None else server.get("port", 8765)
         try:
             self.port = port_number(port)
         except argparse.ArgumentTypeError as error:
             raise RuntimeError(str(error)) from error
-        self.mode = self.args.mode or os.environ.get("MIRAGE_MODE") or server.get("mode", "local")
-        if self.mode not in ("local", "authenticated"):
+        mode_override = self.args.mode or os.environ.get("MIRAGE_MODE")
+        self.mode = mode_override or server.get("mode", "local")
+        if self.mode not in ACCESS_MODES:
             raise RuntimeError("access mode must be local or authenticated")
+        if terminal is None:
+            return
+        if not mode_override:
+            if dialog:
+                items = [part for item in ACCESS_MODES.items() for part in item]
+                self.mode = dialog_prompt(
+                    terminal, dialog, "--default-item", self.mode,
+                    "--menu", "Choose Mirage access mode", "12", "72", "2", *items,
+                )
+            else:
+                print("Access mode", file=terminal)
+                for index, label in enumerate(ACCESS_MODES.values(), 1):
+                    print(f"  {index}. {label}", file=terminal)
+                while True:
+                    mode = read_terminal(terminal, f"Access mode [{self.mode}]: ").lower()
+                    mode = {"1": "local", "2": "authenticated"}.get(mode, mode) or self.mode
+                    if mode in ACCESS_MODES:
+                        self.mode = mode
+                        break
+                    print("Choose local or authenticated.", file=terminal)
+        if port_override is None:
+            prompt = "Web interface port (1-65535)"
+            while True:
+                value = (
+                    dialog_prompt(terminal, dialog, "--inputbox", prompt, "9", "60", str(self.port))
+                    if dialog else read_terminal(terminal, f"{prompt} [{self.port}]: ")
+                )
+                try:
+                    self.port = port_number(value or self.port)
+                    break
+                except argparse.ArgumentTypeError as error:
+                    if dialog:
+                        dialog_prompt(terminal, dialog, "--msgbox", str(error), "8", "60")
+                    else:
+                        print(error, file=terminal)
 
     def resolve_options(self):
         standalone_default = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "mirage" / "data"
@@ -300,7 +444,6 @@ class Installer:
         self.data = Path(self.option("data_dir", "MIRAGE_DATA_DIR", "data_dir", data_default)).resolve()
         self.prefix = Path(self.option("prefix", "MIRAGE_PREFIX", "prefix", Path.home() / ".local" / "bin")).resolve()
         self.launcher = self.prefix / "mirage"
-        self.resolve_server_options()
         engine = self.option("engine", "MIRAGE_CONTAINER_ENGINE", "engine")
         if not engine:
             engine = "podman" if shutil.which("podman") else "docker" if shutil.which("docker") else None
@@ -339,8 +482,13 @@ class Installer:
         try:
             from mirage.app_build import build_app
             from mirage.runtime_build import build_runtime
-            app = build_app(self.source, self.data, self.engine)
-            runtime = build_runtime(self.source, self.data, self.engine, activate=False)
+            build_options = {}
+            if not self.local_source:
+                from mirage.provenance import container_git
+
+                build_options["git_command"] = container_git(self.source, self.engine, image=GIT_IMAGE)
+            app = build_app(self.source, self.data, self.engine, **build_options)
+            runtime = build_runtime(self.source, self.data, self.engine, **build_options)
         finally:
             sys.path.pop(0)
         manifest_path = self.data / "releases" / "app" / app["app_build_id"] / "manifest.json"
@@ -392,17 +540,17 @@ class Installer:
         container = self.run_engine(*self.container_arguments(name, data, image, deployment, verify_only, maintenance, final), capture=True)
         return container
 
-    def credentials(self):
+    def credentials(self, terminal=None):
         if self.mode == "local":
             return ""
         admin = os.environ.get("MIRAGE_API_TOKEN", "")
         browser = os.environ.get("MIRAGE_BROWSER_TOKEN", "")
-        if not self.args.non_interactive and (not admin or not browser):
-            with open("/dev/tty", "r+") as terminal:
-                if not admin:
-                    admin = getpass.getpass("Mirage administrator token: ", stream=terminal)
-                if not browser:
-                    browser = getpass.getpass("Mirage browser user token: ", stream=terminal)
+        if terminal is not None and (not admin or not browser):
+            print("Use two different tokens of 16–64 ASCII letters, digits, underscores, or hyphens.", file=terminal)
+            if not admin:
+                admin = getpass.getpass("Mirage administrator token: ", stream=terminal)
+            if not browser:
+                browser = getpass.getpass("Mirage browser user token: ", stream=terminal)
         validate_tokens(admin, browser)
         os.environ["MIRAGE_API_TOKEN"] = admin
         os.environ["MIRAGE_BROWSER_TOKEN"] = browser
@@ -497,41 +645,43 @@ class Installer:
         temporary.symlink_to(target)
         os.replace(temporary, self.launcher)
 
-    def selected_models(self):
+    def selected_models(self, terminal=None, dialog=None):
         selection = self.option("models", "MIRAGE_MODELS", "models", "zimage")
         if self.args.skip_models:
-            selection = "none"
-        if self.args.non_interactive:
+            return "none"
+        defaults = model_selection(selection)
+        if terminal is None or self.args.models is not None or "MIRAGE_MODELS" in os.environ:
             return selection
-        try:
-            terminal = open("/dev/tty", "r+")
-        except OSError:
-            return selection
-        with terminal:
-            dialog = shutil.which("dialog") or shutil.which("whiptail")
-            if dialog:
-                items = []
-                for model, label in (("zimage", "Z-Image Turbo"), ("qwen", "Qwen-Image 2.1"), ("qwen-edit", "Qwen editing projector"), ("moss", "MOSS-Image-SFT")):
-                    state = "ON" if model in selection.split(",") else "OFF"
-                    items += [model, label, state]
-                result = subprocess.run([dialog, "--stdout", "--title", "Mirage models", "--checklist", "Select models to install", "18", "76", "4", *items], text=True, stdout=subprocess.PIPE, stderr=terminal)
-                if result.returncode:
-                    raise RuntimeError("installation cancelled")
-                return ",".join(result.stdout.replace('"', "").split()) or "none"
-            terminal.write("Models: 1) Z-Image  2) Qwen  3) Qwen editing  4) MOSS; all; none\n")
-            terminal.write("Numbers to install [1]: ")
-            answer = terminal.readline()
-        mapping = {"1": "zimage", "2": "qwen", "3": "qwen-edit", "4": "moss"}
-        return ",".join(mapping.get(item.strip(), item.strip()) for item in answer.split(",")) if answer.strip() else "zimage"
+        if dialog:
+            items = []
+            for model, label in MODEL_CHOICES.items():
+                items += [model, label, "ON" if model in defaults else "OFF"]
+            result = dialog_prompt(
+                terminal, dialog, "--checklist", "Select models to install (Space toggles a model)",
+                "18", "76", "4", *items,
+            )
+            return ",".join(result.replace('"', "").split()) or "none"
+        print("Models", file=terminal)
+        mapping = {}
+        for index, (model, label) in enumerate(MODEL_CHOICES.items(), 1):
+            print(f"  {index}. {label}", file=terminal)
+            mapping[str(index)] = model
+        while True:
+            answer = read_terminal(terminal, f"Models to install (comma separated, all, or none) [{selection}]: ")
+            if not answer:
+                return selection
+            choices = ",".join(mapping.get(item, item) for item in re.split(r"[,\s]+", answer.lower()))
+            try:
+                model_selection(choices)
+            except RuntimeError as error:
+                print(error, file=terminal)
+            else:
+                return choices
 
     def install_models(self, selection, image):
-        models = [item for item in selection.replace(" ", ",").split(",") if item]
-        if "all" in models:
-            models = ["zimage", "qwen", "qwen-edit", "moss"]
+        models = model_selection(selection)
         if not models or models == ["none"]:
             return
-        if any(model not in {"zimage", "qwen", "qwen-edit", "moss", "none"} for model in models):
-            raise RuntimeError("unknown model selection")
         editing = "qwen-edit" in models
         selected = [model for model in ("zimage", "qwen", "moss") if model in models or (model == "qwen" and editing)]
         if self.args.import_models:
@@ -546,10 +696,13 @@ class Installer:
                 arguments += ["--with-editing"]
             command(arguments)
         for model in selected:
-            arguments = [self.launcher, "models", "install", model, "--wait"]
+            arguments = [
+                "exec", "-e", f"MIRAGE_API_URL=http://127.0.0.1:{self.port}",
+                "mirage", "python", "-m", "mirage.cli", "models", "install", model, "--wait",
+            ]
             if model == "qwen" and editing:
                 arguments += ["--with-editing"]
-            command(arguments)
+            self.run_engine(*arguments)
 
     def new_journal(self, operation, original_running):
         self.journal = {
@@ -569,10 +722,16 @@ class Installer:
         self.save_journal()
 
     def install_or_update(self, operation):
-        source_reference = self.resolve_source()
         self.resolve_options()
+        with installer_terminal(self.args.non_interactive) as terminal:
+            dialog = None
+            if terminal is not None and os.environ.get("TERM") not in (None, "", "dumb"):
+                dialog = shutil.which("dialog") or shutil.which("whiptail")
+            self.resolve_server_options(terminal, dialog)
+            selection = self.selected_models(terminal, dialog)
+            token = self.credentials(terminal)
+        source_reference = self.resolve_source()
         self.state["source_reference"] = source_reference
-        selection = self.selected_models()
         original_running = self.container_running("mirage")
         if operation == "update" and not self.container_exists("mirage"):
             raise RuntimeError("no installed Mirage container was found")
@@ -583,7 +742,6 @@ class Installer:
             self.intent("initialize-config")
             self.initialize_config()
             self.completed("initialize-config")
-            token = self.credentials()
             deployment, image, runtime = self.build()
             if not (self.data / "mirage.sqlite3").is_file():
                 self.intent("initialize-database")
@@ -669,14 +827,10 @@ class Installer:
             self.intent("launcher")
             self.install_launcher()
             self.completed("launcher")
+            if selection != "none" and not self.args.skip_models:
+                self.install_models(selection, image)
             if self.args.no_start:
                 self.stop_container("mirage")
-            if selection != "none" and not self.args.skip_models:
-                if self.args.no_start:
-                    command([self.launcher, "start"])
-                self.install_models(selection, image)
-                if self.args.no_start:
-                    self.stop_container("mirage")
             self.journal_path.unlink(missing_ok=True)
             self.journal = None
             exposure = "loopback only" if self.mode == "local" else "all interfaces"
@@ -746,9 +900,11 @@ class Installer:
         if not self.args.yes:
             if self.args.non_interactive:
                 raise RuntimeError("remove requires --yes in non-interactive mode")
-            with open("/dev/tty", "r+") as terminal:
-                terminal.write("Remove the Mirage application stack and launcher? User data is preserved. [y/N] ")
-                if terminal.readline().strip().lower() not in ("y", "yes"):
+            with installer_terminal(False) as terminal:
+                if terminal is None:
+                    raise RuntimeError("remove requires --yes when no terminal is available")
+                answer = read_terminal(terminal, "Remove the Mirage application stack and launcher? User data is preserved. [y/N] ")
+                if answer.lower() not in ("y", "yes"):
                     raise RuntimeError("removal cancelled")
         self.data = Path(self.state.get("data_dir", "")).resolve()
         self.engine = self.state.get("engine") or ("podman" if shutil.which("podman") else "docker")
