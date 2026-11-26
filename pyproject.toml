@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mirage"
-version = "1.0.0"
+version = "1.1.0"
 description = "Mirage persistent local image generation with stable-diffusion.cpp"
 license = "MIT"
 license-files = ["LICENSE"]
