@@ -1,4 +1,45 @@
-from mirage.engine import EngineClient
+import os
+import select
+import shlex
+import shutil
+import subprocess
+import time
+
+import pytest
+
+from mirage.engine import EngineClient, LINE_OUTPUT_ENTRYPOINT
+
+
+@pytest.mark.skipif(not shutil.which("perl") or not shutil.which("bash"), reason="requires the runtime's shell utilities")
+def test_progress_frames_are_flushed_before_next_step_and_preserve_failure(tmp_path):
+    renderer = tmp_path / "sd-cli"
+    renderer.write_text(r'''#!/bin/sh
+printf '\r  |=>   | 1/40 - 39.07s/it\033['
+sleep 0.05
+printf 'K'
+read -r next_step
+printf '\r  |==>  | 2/40 - 39.15s/it\033[K\n'
+printf 'renderer failed\n' >&2
+exit 17
+''')
+    renderer.chmod(0o755)
+    *shell, script, name = LINE_OUTPUT_ENTRYPOINT
+    entrypoint = [*shell, script.replace("/usr/local/bin/sd-cli", shlex.quote(str(renderer)), 1), name]
+    with subprocess.Popen(entrypoint, stdin=subprocess.PIPE, stdout=subprocess.PIPE) as process:
+        try:
+            received = b""
+            deadline = time.monotonic() + 5
+            while b"\n" not in received:
+                ready, _, _ = select.select([process.stdout], [], [], max(0, deadline - time.monotonic()))
+                assert ready, "the first progress frame was buffered"
+                block = os.read(process.stdout.fileno(), 4096)
+                assert block, "the renderer closed before its first progress frame"
+                received += block
+            assert received == b"  |=>   | 1/40 - 39.07s/it\n"
+        finally:
+            process.stdin.close()
+        assert process.stdout.read() == b"  |==>  | 2/40 - 39.15s/it\nrenderer failed\n"
+        assert process.wait(timeout=5) == 17
 
 
 def test_podman_containers_use_host_identity_and_keep_id(monkeypatch):

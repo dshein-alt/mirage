@@ -6,7 +6,7 @@ import time
 
 from .engine import EngineClient
 from .errors import WorkbenchError
-from .progress import parse_progress, parse_stage
+from .progress import GenerationProgress
 
 
 class ProcessRunner:
@@ -91,12 +91,15 @@ class ProcessRunner:
     def run_fake(self, job, temporary, log, cancel_event):
         from PIL import Image
 
-        for step in range(job["resolved"]["steps"]):
+        total = job["resolved"]["steps"]
+        for step in range(total):
             if cancel_event.is_set():
                 raise WorkbenchError("job_cancelled", "Job cancelled", 409)
             log.write(f"sampling step {step + 1}/{job['resolved']['steps']}\n")
             log.flush()
-            self.database.update_job(job["id"], progress=(step + 1) / job["resolved"]["steps"] * 0.95, stage="sampling")
+            self.database.update_job(
+                job["id"], progress=0.05 + 0.9 * (step + 1) / total, stage=f"sampling:{step + 1}/{total}",
+            )
             time.sleep(0.005)
         image = Image.new("RGB", (job["resolved"]["width"], job["resolved"]["height"]), (35, 90, 120))
         image.save(temporary, "PNG")
@@ -127,13 +130,17 @@ class ProcessRunner:
             f"{host_data / 'outputs'}:/output:rw",
             f"{host_data / 'logs'}:/logs:rw",
         ]
-        container = self.engine.create(name, image, command, binds, devices, self.settings.get("environment", {}))
+        container = self.engine.create(
+            name, image, command, binds, devices, self.settings.get("environment", {}),
+            line_output=True,
+        )
         self.database.set_container(job["id"], container)
         try:
             self.engine.start(container)
             response, connection = self.engine.logs(container)
             try:
                 buffered = b""
+                progress = GenerationProgress()
                 while True:
                     if cancel_event.is_set():
                         self.engine.remove(container, force=True)
@@ -146,7 +153,8 @@ class ProcessRunner:
                         line = raw.decode("utf-8", "replace").rstrip("\r")
                         log.write(line + "\n")
                         log.flush()
-                        self.record_log_progress(job["id"], line)
+                        if not cancel_event.is_set():
+                            self.database.update_job(job["id"], **progress.update(line))
                 if buffered:
                     log.write(buffered.decode("utf-8", "replace") + "\n")
             finally:
@@ -164,17 +172,6 @@ class ProcessRunner:
         finally:
             self.database.update_job(job["id"], container_id=None)
             self.engine.remove(container, force=True)
-
-    def record_log_progress(self, job_id, line):
-        progress = parse_progress(line)
-        stage = parse_stage(line)
-        fields = {}
-        if progress is not None:
-            fields["progress"] = 0.05 + progress * 0.9
-        if stage:
-            fields["stage"] = stage
-        if fields:
-            self.database.update_job(job_id, **fields)
 
     def cancel(self, job_id):
         job = self.database.get_job_with_container(job_id)

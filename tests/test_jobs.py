@@ -130,7 +130,7 @@ def test_container_wait_after_removal_respects_cancellation(app, registry, monke
         def require_runtime_image(self, image):
             pass
 
-        def create(self, *args):
+        def create(self, *args, **kwargs):
             return "removed-container"
 
         def start(self, container):

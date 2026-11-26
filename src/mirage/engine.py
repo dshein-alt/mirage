@@ -10,6 +10,27 @@ from urllib.parse import quote, urlencode
 from .errors import WorkbenchError
 
 
+# Finish each sd-cli progress frame before the engine's log driver buffers it.
+LINE_OUTPUT_ENTRYPOINT = [
+    "/bin/bash", "-o", "pipefail", "-c",
+    r'''/usr/local/bin/sd-cli "$@" 2>&1 | perl -e '
+        $| = 1;
+        my $pending = "";
+        while (1) {
+            defined(my $size = sysread(STDIN, my $chunk, 8192)) or die "Cannot read sd-cli output: $!";
+            last unless $size;
+            $pending .= $chunk;
+            $pending =~ s/\e\[K\n?/\n/g;
+            $pending =~ tr/\r//d;
+            my $tail = $pending =~ s/(\e\[?)\z// ? $1 : "";
+            print $pending;
+            $pending = $tail;
+        }
+        print $pending;
+    ' ''', "sd-cli",
+]
+
+
 class UnixHTTPConnection(http.client.HTTPConnection):
     def __init__(self, socket_path, timeout=60):
         super().__init__("localhost", timeout=timeout)
@@ -99,7 +120,7 @@ class EngineClient:
         if b'"error"' in payload:
             raise WorkbenchError("runtime_image_build_failed", payload.decode("utf-8", "replace")[-4000:], 500)
 
-    def create(self, name, image, command, binds, devices=(), environment=None, workdir="/output"):
+    def create(self, name, image, command, binds, devices=(), environment=None, workdir="/output", *, line_output=False):
         host_config = {
             "Binds": binds,
             "AutoRemove": False,
@@ -114,7 +135,7 @@ class EngineClient:
             host_config["UsernsMode"] = "keep-id"
         body = {
             "Image": image,
-            "Entrypoint": ["/usr/local/bin/sd-cli"],
+            "Entrypoint": LINE_OUTPUT_ENTRYPOINT if line_output else ["/usr/local/bin/sd-cli"],
             "Cmd": command,
             "Env": [f"{key}={value}" for key, value in (environment or {}).items()],
             "WorkingDir": workdir,
