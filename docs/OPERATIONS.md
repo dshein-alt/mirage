@@ -83,6 +83,12 @@ mirage models verify zimage
 
 If a download is interrupted, run the same `mirage models install` command again to resume. Set `HF_TOKEN` before installation or service startup if Hugging Face requires a token for the files you need.
 
+### Qwen editing and GPU memory
+
+Select **Install with editing** in the browser, `--models qwen-edit` in the standalone installer, or `mirage models install qwen --with-editing` from the command line to install the vision projector. When a Qwen-Image 2.1 job includes reference images, Mirage selects 4-bit (`q4_1`) storage for the text and reference attention cache. Quantizing the cache can change the output slightly. Text-to-image jobs use sd.cpp’s default cache precision.
+
+Editing needs more available GPU memory than text-to-image generation. In a Vulkan test on a Radeon 780M, one 1024×1024 edit with one reference peaked at 13.4 GiB of device-wide memory usage, compared with 10.5 GiB for 1024×1024 text-to-image. Actual usage depends on the backend, resolution, reference images, and other GPU workloads. If editing slows down or affects desktop responsiveness, try the `sd` resolution preset (512×512) or use a GPU with more memory.
+
 ### Use a different release source
 
 The standalone installer prefers the latest published Mirage release on GitHub. If the release endpoint reports no release, it checks the repository’s tags in descending version order. It uses the repository’s default branch at Git HEAD when there are no tags. You can override the release metadata URL and the Git repository. A release response must include a `tag_name` field.

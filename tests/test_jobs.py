@@ -69,7 +69,7 @@ def test_queued_job_keeps_config_snapshot(app, registry):
     assert app.runner.command(job, app.paths.outputs / "old.png") != app.runner.command(new_job, app.paths.outputs / "new.png")
 
 
-def test_qwen_edit_uses_projector_and_cpu_vulkan_split(app, registry):
+def test_qwen_edit_uses_projector_and_four_bit_cache(app, registry):
     install_sparse(registry, "qwen", editing=True)
     buffer = BytesIO()
     Image.new("RGB", (64, 64), "red").save(buffer, "PNG")
@@ -79,7 +79,16 @@ def test_qwen_edit_uses_projector_and_cpu_vulkan_split(app, registry):
     assert "--llm_vision" in command
     assert command[command.index("--backend") + 1] == "te=cpu,clip_vision=cpu,diffusion=vulkan0,vae=vulkan0"
     assert "--offload-to-cpu" in command
+    assert command[command.index("--model-args") + 1] == "qwen_image_2_1_prefix_cache_type=q4_1"
     assert f"/inputs/{reference['filename']}" in command
+
+
+def test_qwen_text_generation_keeps_default_cache_with_editing_installed(app, registry):
+    install_sparse(registry, "qwen", editing=True)
+    job = app.submit_generation({"prompt": "A classic car", "model": "qwen"})
+    command = app.runner.command(job, app.paths.outputs / "temporary.png")
+    assert "--llm_vision" not in command
+    assert "--model-args" not in command
 
 
 def test_cuda_job_requests_nvidia_gpu_without_dri_devices(app, registry, monkeypatch):

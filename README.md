@@ -40,6 +40,8 @@ If you skipped Z-Image Turbo in setup, open **Models**, find **Z-Image Turbo**, 
 
 ## Edit an existing image
 
+Qwen-Image 2.1 editing needs more available GPU memory than text-to-image generation, even with Mirage’s automatic 4-bit attention cache. [Qwen editing and GPU memory](docs/OPERATIONS.md#qwen-editing-and-gpu-memory)
+
 In **Models**, click **Install** on Qwen-Image 2.1. If Qwen is already installed without its editing component, click **Install with editing**. Once the model is ready, select **Qwen-Image 2.1** in **Generate**, add a file under **Reference images**, and describe the edit, such as `Change the car to dark green`. Click **Queue generation**.
 
 ## More help

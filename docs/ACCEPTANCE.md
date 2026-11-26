@@ -15,7 +15,7 @@ This checklist distinguishes automated, non-GPU checks from checks that require 
 | Disconnect-safe queue | Service owns workers; API returns immediately; browser/CLI restart check on target |
 | Cancellation without publication | `tests/test_jobs.py::test_cancellation_does_not_publish_image` |
 | Restart reconciliation and explicit retry | `tests/test_jobs.py`; real service restart check on target |
-| Qwen edit projector and CPU/Vulkan split | Argument test in `tests/test_jobs.py`; real Qwen edit and log inspection required |
+| Qwen edit projector, 4-bit prefix cache, and CPU/Vulkan split | Argument tests in `tests/test_jobs.py`; real Qwen edit and log inspection required |
 | Reference rejection for unsupported models | `tests/test_jobs.py` |
 | Resumable downloads and checksum rejection | `tests/test_downloader.py` with tiny local payload |
 | Upload content/path safety | `tests/test_models.py` |

@@ -83,6 +83,8 @@ class ProcessRunner:
         if reference_ids:
             vision = next(component for component in model["components"].values() if component["role"] == "llm_vision")
             command.extend(["--llm_vision", f"/models/{vision['local_path']}"])
+            if resolved["model"] == "qwen":
+                command.extend(["--model-args", "qwen_image_2_1_prefix_cache_type=q4_1"])
             for input_id in reference_ids:
                 record = self.database.get_input(input_id)
                 command.extend(["-r", f"/inputs/{record['filename']}"])
