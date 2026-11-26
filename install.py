@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import argparse
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 import fcntl
 import getpass
 import io
@@ -187,16 +187,15 @@ def enter_maintenance(data, owner):
         connection.close()
 
 
-def leave_maintenance(data, owner=None):
-    connection = connect_database(data)
-    try:
-        if owner:
-            row = connection.execute("SELECT owner FROM maintenance WHERE id=1").fetchone()
-            if row and row["owner"] not in (None, owner):
-                raise RuntimeError("another maintenance operation is active")
-        connection.execute("UPDATE maintenance SET active=0, owner=NULL, updated_at=datetime('now') WHERE id=1")
-    finally:
-        connection.close()
+def leave_maintenance(data, owner=None, *, ignore_other_owner=False):
+    statement = "UPDATE maintenance SET active=0, owner=NULL, updated_at=datetime('now') WHERE id=1"
+    parameters = ()
+    if owner is not None:
+        statement += " AND (owner IS NULL OR owner=?)"
+        parameters = (owner,)
+    with closing(connect_database(data)) as connection:
+        if not connection.execute(statement, parameters).rowcount and not ignore_other_owner:
+            raise RuntimeError("another maintenance operation is active")
 
 
 def wait_for_writes(data, timeout=60):
@@ -517,7 +516,7 @@ class Installer:
         atomic_json(manifest_path, app)
         return app["deployment_id"], app["app_image"], runtime
 
-    def container_arguments(self, name, data, image, deployment, verify_only=False, maintenance=False, final=False):
+    def container_arguments(self, name, data, image, deployment, verify_only=False, final=False):
         socket_path = self.engine_socket()
         server = read_json(Path(data) / "config" / "settings.json")["server"]
         port = server["port"]
@@ -544,16 +543,19 @@ class Installer:
             "-e", f"MIRAGE_ALLOW_NO_GPU={os.environ.get('MIRAGE_ALLOW_NO_GPU', '0')}",
             "-e", f"MIRAGE_DRI_DEVICES={','.join(devices)}",
             "-e", f"MIRAGE_VERIFY_ONLY={'1' if verify_only else '0'}",
-            "-e", f"MIRAGE_MAINTENANCE={'1' if maintenance else '0'}",
+            "-e", "MIRAGE_MAINTENANCE=0",
         ]
         if self.engine == "docker":
             arguments += ["--group-add", str(Path(socket_path).stat().st_gid)]
         return arguments + [image]
 
-    def start_container(self, name, data, image, deployment, verify_only=False, maintenance=False, final=False):
+    def start_container(self, name, data, image, deployment, verify_only=False, final=False):
         if self.container_exists(name):
             self.stop_container(name, remove=True)
-        container = self.run_engine(*self.container_arguments(name, data, image, deployment, verify_only, maintenance, final), capture=True)
+        container = self.run_engine(
+            *self.container_arguments(name, data, image, deployment, verify_only=verify_only, final=final),
+            capture=True,
+        )
         return container
 
     def credentials(self, terminal=None):
@@ -641,7 +643,7 @@ class Installer:
             arguments += ["--userns=keep-id"]
         arguments += [
             "-v", f"{self.data}:/data:rw", "-e", "MIRAGE_DATA_DIR=/data",
-            "-e", "MIRAGE_MAINTENANCE=1", "-e", f"MIRAGE_DEPLOYMENT_ID={deployment}",
+            "-e", "MIRAGE_MAINTENANCE=0", "-e", f"MIRAGE_DEPLOYMENT_ID={deployment}",
             image["id"], "python", "-c", code,
         ]
         self.run_engine(*arguments)
@@ -725,6 +727,7 @@ class Installer:
             "schema_version": 1,
             "operation": operation,
             "operation_id": self.operation_id,
+            "engine": self.engine,
             "data_dir": str(self.data),
             "original_state": self.state,
             "original_running": original_running,
@@ -794,7 +797,7 @@ class Installer:
             settings = read_json(self.data / "config" / "settings.json")
             port = settings["server"]["port"]
             self.intent("start-final")
-            container_id = self.start_container(self.candidate, self.data, image["id"], deployment, maintenance=True, final=True)
+            container_id = self.start_container(self.candidate, self.data, image["id"], deployment, final=True)
             self.journal["candidate_container_id"] = container_id
             self.save_journal()
             self.wait_health(port, deployment, image["id"], token)
@@ -859,16 +862,29 @@ class Installer:
             if self.journal and self.journal.get("verification_dir"):
                 shutil.rmtree(self.journal["verification_dir"], ignore_errors=True)
 
+    def release_recovery_maintenance(self, journal):
+        if not (self.data / DATABASE_NAME).is_file():
+            return
+        owner = journal["operation_id"]
+        # Older installers gave their initial migration's maintenance gate to the app build.
+        if "initialize-database" in journal.get("actions", []):
+            with closing(connect_database(self.data)) as connection:
+                row = connection.execute("SELECT owner FROM maintenance WHERE id=1 AND active=1").fetchone()
+            legacy_owner = row["owner"] if row else None
+            if legacy_owner and re.fullmatch(r"app-[0-9a-f]{32}", legacy_owner):
+                manifest = read_json(self.data / "releases" / "app" / legacy_owner / "manifest.json", {})
+                if manifest.get("deployment_id") == legacy_owner:
+                    owner = legacy_owner
+        leave_maintenance(self.data, owner, ignore_other_owner=True)
+
     def recover(self):
         journal = self.journal or read_json(self.journal_path)
         if not journal:
             return
         self.journal = journal
-        self.operation_id = journal["operation_id"]
         self.data = Path(journal["data_dir"])
         if journal.get("committed") or journal.get("operation") == "remove":
-            if (self.data / DATABASE_NAME).is_file():
-                leave_maintenance(self.data, self.operation_id)
+            self.release_recovery_maintenance(journal)
             self.journal_path.unlink(missing_ok=True)
             self.journal = None
             return
@@ -914,10 +930,10 @@ class Installer:
                 os.environ.get("MIRAGE_API_TOKEN", ""),
                 allow_unauthorized=True,
             )
-        if (self.data / DATABASE_NAME).is_file():
-            leave_maintenance(self.data, self.operation_id)
-        if journal.get("original_state"):
-            atomic_json(self.state_path, journal["original_state"])
+        self.release_recovery_maintenance(journal)
+        self.state = journal.get("original_state") or {}
+        if self.state:
+            atomic_json(self.state_path, self.state)
         else:
             self.state_path.unlink(missing_ok=True)
         self.journal_path.unlink(missing_ok=True)
@@ -1004,7 +1020,10 @@ class Installer:
         self.lock()
         try:
             if self.journal_path.exists():
-                self.engine = self.state.get("engine") or ("podman" if shutil.which("podman") else "docker")
+                self.journal = read_json(self.journal_path)
+                self.engine = self.journal.get("engine") or self.option(
+                    "engine", "MIRAGE_CONTAINER_ENGINE", "engine", "podman" if shutil.which("podman") else "docker"
+                )
                 self.recover()
             operation = self.args.operation
             if operation != "remove" and (self.args.purge_models or self.args.purge_data):

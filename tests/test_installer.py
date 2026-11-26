@@ -273,6 +273,46 @@ def test_recovery_after_commit_preserves_migrated_database(tmp_path):
     connection.close()
 
 
+@pytest.mark.parametrize("known_build", [True, False])
+def test_retry_recovers_legacy_initialization_without_releasing_other_owners(tmp_path, monkeypatch, known_build):
+    installer, data, _ = recovery_fixture(tmp_path)
+    legacy_owner = "app-" + "a" * 32
+    installer_module.leave_maintenance(data, "recovery-test")
+    installer_module.enter_maintenance(data, legacy_owner)
+    if known_build:
+        manifest = data / "releases" / "app" / legacy_owner / "manifest.json"
+        installer_module.atomic_json(manifest, {"deployment_id": legacy_owner})
+    installer.journal.update({
+        "operation": "install",
+        "engine": "docker",
+        "actions": ["snapshot-config", "initialize-config", "initialize-database"],
+        "pending_action": "maintenance",
+    })
+    installer.save_journal()
+
+    retry = make_installer(tmp_path, ["--runtime", "podman"])
+    monkeypatch.setattr(retry, "container_exists", lambda name: False)
+
+    def next_operation(operation):
+        assert operation == "install"
+        assert retry.engine == "docker"
+        assert retry.operation_id != "recovery-test"
+        assert retry.candidate == f"mirage-candidate-{retry.operation_id}"
+        connection = installer_module.connect_database(data)
+        try:
+            row = connection.execute("SELECT active, owner FROM maintenance").fetchone()
+            assert tuple(row) == ((0, None) if known_build else (1, legacy_owner))
+        finally:
+            connection.close()
+        if known_build:
+            installer_module.enter_maintenance(data, retry.operation_id)
+            installer_module.leave_maintenance(data, retry.operation_id)
+
+    monkeypatch.setattr(retry, "install_or_update", next_operation)
+    retry.run()
+    assert not retry.journal_path.exists()
+
+
 def test_update_recovery_keeps_live_container_and_restores_settings_before_cutover(tmp_path, monkeypatch):
     installer, data, _ = recovery_fixture(tmp_path)
     installer.journal.update({

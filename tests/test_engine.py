@@ -30,3 +30,39 @@ def test_offline_podman_migration_uses_keep_id(tmp_path):
     installer.offline_migrate({"id": "image-id"}, "deployment-id")
     assert "--userns=keep-id" in arguments
     assert f"{installer.data}:/data:rw" in arguments
+    assert "MIRAGE_MAINTENANCE=0" in arguments
+
+
+def test_migration_and_service_start_leave_maintenance_with_the_installer(paths, tmp_path, monkeypatch):
+    from mirage.service import Application
+    from test_installer import installer_module, make_installer
+
+    installer = make_installer(tmp_path)
+    installer.engine = "podman"
+    installer.data = paths.data
+    monkeypatch.setattr(installer, "engine_socket", lambda: "/tmp/podman.sock")
+
+    def initialize(*arguments):
+        with monkeypatch.context() as environment:
+            for argument in arguments:
+                if argument.startswith(("MIRAGE_MAINTENANCE=", "MIRAGE_DEPLOYMENT_ID=")):
+                    name, value = argument.split("=", 1)
+                    environment.setenv(name, value)
+            service = Application(paths)
+            try:
+                return service.database.maintenance_status()
+            finally:
+                service.close()
+
+    monkeypatch.setattr(installer, "run_engine", initialize)
+    image = {"id": "image-id"}
+    deployment = "app-fixture"
+    assert not paths.database.exists()
+    installer.offline_migrate(image, deployment)
+    installer_module.enter_maintenance(paths.data, installer.operation_id)
+    installer.offline_migrate(image, deployment)
+
+    arguments = installer.container_arguments("mirage", paths.data, image["id"], deployment, final=True)
+    assert initialize(*arguments)["owner"] == installer.operation_id
+    installer_module.leave_maintenance(paths.data, installer.operation_id)
+    assert not initialize(*arguments)["active"]
