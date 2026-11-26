@@ -34,6 +34,10 @@ If you skipped Z-Image Turbo in setup, open **Models**, find **Z-Image Turbo**, 
 2. Follow progress in **Jobs**. You can close the browser tab while Mirage works.
 3. Open **Gallery** to browse or search your finished images. Click an image’s prompt to open its details, then click **Download** to save the PNG. Mirage also stores PNGs and their metadata under `~/.local/share/mirage/data/outputs/` by default.
 
+![Mirage Gallery showing results from Qwen-Image 2.1, MOSS-Image-SFT, and Z-Image Turbo](assets/mirage-web-ui-gallery.png)
+
+[Jobs screenshot and full-size generation examples](docs/EXAMPLES.md)
+
 ## Edit an existing image
 
 In **Models**, click **Install** on Qwen-Image 2.1. If Qwen is already installed without its editing component, click **Install with editing**. Once the model is ready, select **Qwen-Image 2.1** in **Generate**, add a file under **Reference images**, and describe the edit, such as `Change the car to dark green`. Click **Queue generation**.

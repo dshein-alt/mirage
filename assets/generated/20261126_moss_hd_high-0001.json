@@ -1,0 +1,33 @@
+{
+  "model": "moss",
+  "resolution": "hd",
+  "quality": "high",
+  "width": 1024,
+  "height": 1024,
+  "steps": 50,
+  "cfg_scale": 3.0,
+  "sampler": "euler",
+  "scheduler": "simple",
+  "seed": 1303521484,
+  "config_revision": "bba6bbd6ef5b4e06deb761d73ba668ad8c0dc8f7a12c355780966b93e66bb6dc",
+  "runtime_revision": "52491bd9f1fc15281791723bdff13baab7fd6819",
+  "sd_cpp_commit": "52491bd9f1fc15281791723bdff13baab7fd6819",
+  "runtime_build": "52491bd9f1fc-99c8346782dee19f344cc300d63008b3",
+  "runtime_image_id": "2c7e18537e2b9f36b400964342abeac980e7d232a002894424d78890947f949e",
+  "runtime_image_reference": "localhost/mirage-runtime:52491bd9f1fc-99c8346782dee19f344cc300d63008b3",
+  "backend_profile": {
+    "name": "vulkan-balanced",
+    "backend": "te=cpu,clip_vision=cpu,diffusion=vulkan0,vae=vulkan0",
+    "extra_args": [
+      "--offload-to-cpu"
+    ]
+  },
+  "model_extra_args": [],
+  "output_name": "20261126_moss_hd_high-0001.png",
+  "prompt": "A red fox sitting gracefully and reading an open manga, beneath a blossoming sakura tree, snow-capped Mount Fuji in the distance, classical Japanese medieval emakimono painting style, yamato-e aesthetic, mineral pigment colors, gold leaf accents, fine brushwork, parchment texture, drifting cherry blossom petals, tranquil atmosphere, horizontal composition",
+  "image": "20261126_moss_hd_high-0001.png",
+  "job_id": "e7ae986b-4182-4f7b-9232-12d455b2d7f2",
+  "timestamp": "2026-11-26T11:36:48.033370+00:00",
+  "elapsed_seconds": 1565.9794371699973,
+  "sha256": "5184d6db8bfe06cae73c47aed54848a46a3df8b479ed4679a41e7f5787e8008e"
+}
