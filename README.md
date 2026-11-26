@@ -2,7 +2,7 @@
 
 <img src="assets/mirage_logo.png" alt="Mirage logo" width="240">
 
-Mirage is a web interface for generating and editing images on your Linux machine. In your browser, write a prompt, track your jobs, and browse or download the results. Mirage runs `stable-diffusion.cpp` locally.
+Mirage is a web interface for generating and editing images on your Linux machine. In your browser, write a prompt, track your jobs, and browse or download the results. Mirage runs [`stable-diffusion.cpp`](https://github.com/leejet/stable-diffusion.cpp) locally.
 
 ## 1. Install the web interface
 
