@@ -66,13 +66,20 @@ def read_terminal(terminal, prompt):
 
 
 def dialog_prompt(terminal, dialog, *arguments):
-    result = subprocess.run(
-        [dialog, "--stdout", "--title", "Mirage setup", *arguments],
-        stdin=terminal, stderr=terminal, stdout=subprocess.PIPE, text=True,
-    )
-    if result.returncode:
-        raise RuntimeError("installation cancelled")
-    return result.stdout.strip()
+    # Keep dialog on the alternate screen and clear the widget before leaving it.
+    screen_options = ["--clear"]
+    if Path(dialog).name == "dialog":
+        screen_options = ["--keep-tite", "--erase-on-exit"]
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as answer:
+        fd = answer.fileno()
+        result = subprocess.run(
+            [dialog, "--output-fd", str(fd), *screen_options, "--title", "Mirage setup", *arguments],
+            stdin=terminal, stdout=terminal, stderr=terminal, pass_fds=(fd,),
+        )
+        if result.returncode:
+            raise RuntimeError("installation cancelled")
+        answer.seek(0)
+        return answer.read().strip()
 
 
 def model_selection(selection):

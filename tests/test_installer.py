@@ -89,6 +89,24 @@ def test_dialog_setup_prefills_saved_choices(tmp_path, monkeypatch):
     assert models[models.index("qwen-edit") + 2] == "ON"
 
 
+@pytest.mark.parametrize("dialog", ["dialog", "whiptail"])
+def test_dialog_keeps_screen_output_on_terminal_and_captures_only_the_answer(monkeypatch, dialog):
+    terminal = Mock()
+
+    def run(arguments, *, stdin, stdout, stderr, pass_fds):
+        assert stdin is stdout is stderr is terminal
+        screen_options = ["--keep-tite", "--erase-on-exit"] if dialog == "dialog" else ["--clear"]
+        assert arguments[3:3 + len(screen_options)] == screen_options
+        fd = int(arguments[arguments.index("--output-fd") + 1])
+        assert pass_fds == (fd,)
+        os.write(fd, b"zimage")
+        return subprocess.CompletedProcess(arguments, 0)
+
+    monkeypatch.setattr(installer_module.subprocess, "run", run)
+
+    assert installer_module.dialog_prompt(terminal, dialog, "--checklist") == "zimage"
+
+
 def test_explicit_setup_values_skip_prompts(tmp_path):
     installer = make_installer(tmp_path, ["--mode", "local", "--port", "9200", "--skip-models"])
     terminal = Mock()
